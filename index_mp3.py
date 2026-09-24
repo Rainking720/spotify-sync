@@ -12,7 +12,12 @@ from norm import norm_artist, norm_title, NORM_VERSION
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(HERE, "mp3_index.db")
-DEFAULT_ROOT = r"D:\Mp3"
+DEFAULT_ROOT = None     # None -> the library_root setting (see settings.py)
+
+
+def library_root():
+    import settings
+    return settings.get("library_root")
 
 
 def connect(db=DB):
@@ -67,10 +72,10 @@ def read_tags(path):
     return artist, title, album
 
 
-def refresh(root=DEFAULT_ROOT, db=DB, verbose=True):
+def refresh(root=None, db=DB, verbose=True):
     # Config may say 'D:/Mp3' while stored paths use backslashes; without
     # this every path looks both new and deleted and the scan never goes warm.
-    root = os.path.normpath(root)
+    root = os.path.normpath(root or library_root())
     con = connect(db)
     known = {p: (m, s) for p, m, s in
              con.execute("SELECT path, mtime, size FROM tracks")}
@@ -138,9 +143,10 @@ def load_keys(db=DB):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Index the mp3 library by ID3 tags.")
-    ap.add_argument("--root", default=DEFAULT_ROOT)
+    ap.add_argument("--root", default=None, help="default: library_root setting")
     ap.add_argument("--db", default=DB)
     args = ap.parse_args()
-    if not os.path.isdir(args.root):
-        sys.exit(f"library root not found: {args.root}")
-    refresh(args.root, args.db)
+    root = args.root or library_root()
+    if not os.path.isdir(root):
+        sys.exit(f"library root not found: {root}")
+    refresh(root, args.db)

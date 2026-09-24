@@ -10,7 +10,8 @@ has already succeeded and must not be treated as failed.
 """
 import os
 
-PLAYLIST = "NewFromSpotify"
+import settings as _settings
+PLAYLIST = _settings.get("itunes_playlist")   # see settings.py
 PROG_ID = "iTunes.Application"
 ADD_TIMEOUT = 30.0
 

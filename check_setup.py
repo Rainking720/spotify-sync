@@ -28,14 +28,20 @@ def run(cmd):
         return "error: " + str(e)
 
 
-def find_tool(name):
-    """Mirror yt2mp3.ps1: next to the scripts, then the parent folder, then PATH."""
-    for d in (HERE, PARENT):
-        p = os.path.join(d, name)
-        if os.path.exists(p):
-            return p, "found next to the repo" if d == PARENT else "found in the repo folder"
-    p = shutil.which(name)
-    return (p, "found on PATH only") if p else (None, "")
+def find_tool(name, key):
+    """Resolve exactly as the code does (settings.tool), and say how it was found."""
+    import settings
+    p = settings.tool(name, key)
+    if not p:
+        return None, ""
+    if settings.get(key):
+        return p, "set by " + key
+    d = os.path.dirname(os.path.normcase(p))
+    if d == os.path.normcase(PARENT):
+        return p, "found next to the repo"
+    if d == os.path.normcase(HERE):
+        return p, "found in the repo folder"
+    return p, "found on PATH only"
 
 
 def main():
@@ -69,7 +75,7 @@ def main():
                  "reinstall Python with Tcl/Tk")
 
     print("\nPrograms")
-    yt, where = find_tool("yt-dlp.exe")
+    yt, where = find_tool("yt-dlp.exe", "ytdlp_path")
     if yt:
         state = "WARN" if where == "found on PATH only" else "OK"
         line(state, "yt-dlp " + run([yt, "--version"]), yt + "  (" + where + ")")
@@ -77,10 +83,10 @@ def main():
             print("           yt2mp3.ps1 prefers a copy in " + PARENT +
                   "; a PATH copy may be older")
     else:
-        line("MISSING", "yt-dlp.exe", "put it in " + PARENT)
-    ff, where = find_tool("ffmpeg.exe")
+        line("MISSING", "yt-dlp.exe", "put it in " + PARENT + " or set ytdlp_path")
+    ff, where = find_tool("ffmpeg.exe", "ffmpeg_path")
     line("OK" if ff else "MISSING", "ffmpeg",
-         (ff + "  (" + where + ")") if ff else "put it in " + PARENT)
+         (ff + "  (" + where + ")") if ff else "put it in " + PARENT + " or set ffmpeg_path")
     node = shutil.which("node")
     line("OK" if node else "MISSING", "Node.js " + (run([node, "--version"]) if node else ""),
          (node or "") + "  (yt-dlp uses it for YouTube's scripts)")
@@ -104,15 +110,19 @@ def main():
     line("OK" if os.path.exists(os.path.join(HERE, ".spotify_cache")) else "WARN",
          "Spotify sign-in", "saved" if os.path.exists(os.path.join(HERE, ".spotify_cache"))
          else "run: python spotify.py   (opens a browser once)")
-    for key, default, required in (
-            ("library_root", r"D:\Mp3", True),
-            ("staging_root", r"C:\temp\SpotifyDownloadOnTheSpot\Sorted", False),
-            ("plays_path", r"C:\Users\MurphyG\SpotifyPoller\plays.jsonl", False),
-            ("history_dir", r"C:\Users\MurphyG\Downloads\my_spotify_data"
-                            r"\Spotify Extended Streaming History", False)):
-        p = os.path.normpath(cfg.get(key) or default)
+    import settings
+    for key, required in (("library_root", True), ("staging_root", False),
+                          ("temp_root", False), ("plays_path", False),
+                          ("history_dir", False)):
+        p = settings.get(key)
         ok = os.path.exists(p)
-        line("OK" if ok else ("MISSING" if required else "WARN"), key, p)
+        line("OK" if ok else ("MISSING" if required else "WARN"), key,
+             p + "  [" + settings.source(key) + "]")
+    line("OK", "itunes_playlist", settings.get("itunes_playlist") +
+         "  [" + settings.source("itunes_playlist") + "]")
+    line("OK" if settings.get("contact_email") else "WARN", "contact_email",
+         (settings.get("contact_email") or "not set -- MusicBrainz asks for one")
+         + "  [" + settings.source("contact_email") + "]")
 
     print("\niTunes")
     if args.no_itunes:

@@ -14,7 +14,8 @@ import download, plays, ytpick
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(HERE, "sync.db")
-ITUNES_PLAYLIST = "NewFromSpotify"
+import settings
+ITUNES_PLAYLIST = settings.get("itunes_playlist")
 COLS = ["track_id", "artist", "title", "album", "duration_ms",
         "track_number", "year", "cover_url"]
 FILTERS = {

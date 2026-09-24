@@ -13,22 +13,15 @@ from datetime import datetime, timezone
 
 from norm import norm_artist, norm_title
 
-DEFAULT_PATH = r"C:\Users\MurphyG\SpotifyPoller\plays.jsonl"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 _cache = {"path": None, "mtime": None, "data": None}
 
 
 def path_from_config():
-    cfg = {}
-    p = os.path.join(HERE, "config.json")
-    if os.path.exists(p):
-        try:
-            with open(p, encoding="utf-8") as f:
-                cfg = json.load(f)
-        except (ValueError, OSError):
-            cfg = {}
-    return cfg.get("plays_path") or DEFAULT_PATH
+    """The poller's play log: the plays_path setting (see settings.py)."""
+    import settings
+    return settings.get("plays_path")
 
 
 def aggregate(path=None):

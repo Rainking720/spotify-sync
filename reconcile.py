@@ -8,11 +8,17 @@ import os, sys
 from mutagen import File as MFile
 from norm import norm_artist, norm_title
 
-DEFAULT_ROOT = r"C:\temp\SpotifyDownloadOnTheSpot\Sorted"
+DEFAULT_ROOT = None     # None -> the staging_root setting (see settings.py)
 
 
-def scan(root=DEFAULT_ROOT):
+def _staging():
+    import settings
+    return settings.get("staging_root")
+
+
+def scan(root=None):
     """Map (n_artist, n_title) -> path for everything in the output tree."""
+    root = root or _staging()
     out = {}
     for dp, _dn, fns in os.walk(root):
         for fn in fns:
@@ -32,8 +38,8 @@ def scan(root=DEFAULT_ROOT):
     return out
 
 
-def reconcile(con, root=DEFAULT_ROOT, statuses=("failed", "pending"), verbose=True):
-    disk = scan(root)
+def reconcile(con, root=None, statuses=("failed", "pending"), verbose=True):
+    disk = scan(root or _staging())
     qs = ",".join("?" * len(statuses))
     rows = con.execute(
         f"SELECT track_id,artist,title,n_artist,n_title FROM spotify_tracks "

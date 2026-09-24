@@ -1,14 +1,30 @@
+param([string]$Python, [switch]$DryRun)   # -DryRun: show what would be created
 $ErrorActionPreference = 'Stop'
-
-$Py   = 'C:\Program Files\Python313\pythonw.exe'   # pythonw: no console window
-$Dir  = 'C:\common\spotify-sync'
+# This script's own folder, so the repo can live anywhere.
+$Dir = $PSScriptRoot
+# pythonw.exe (no console window): -Python if given, else the one on PATH.
+if (-not $Python) {
+    $found = Get-Command pythonw.exe -ErrorAction SilentlyContinue
+    if ($found) { $Python = $found.Source }
+}
+if (-not $Python -or -not (Test-Path -LiteralPath $Python)) {
+    throw 'pythonw.exe not found - pass -Python "<path to pythonw.exe>"'
+}
+$Py = $Python
 $Gui  = Join-Path $Dir 'gui.py'
-$Icon = 'C:\Program Files\Python313\DLLs\py.ico'
+$Icon = Join-Path (Split-Path -Parent $Py) 'DLLs\py.ico'
 $Name = 'Spotify Sync.lnk'
-
-if (-not (Test-Path $Py))  { throw "pythonw not found: $Py" }
+$Arg  = '"' + $Gui + '"'
 if (-not (Test-Path $Gui)) { throw "gui.py not found: $Gui" }
 
+if ($DryRun) {
+    Write-Host "shortcut: $Name (dry run, nothing created)"
+    Write-Host "  execute     : $Py"
+    Write-Host "  arguments   : $Arg"
+    Write-Host "  working dir : $Dir"
+    Write-Host "  icon        : $Icon"
+    return
+}
 $desktop = [Environment]::GetFolderPath('Desktop')
 $link    = Join-Path $desktop $Name
 

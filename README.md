@@ -10,10 +10,10 @@ enough that a copy frozen in git would go stale -- so install them separately:
 
 | Needs | Tested with | Where the code looks |
 |---|---|---|
-| Python + `pythonw.exe` | 3.13 | `C:\Program Files\Python313` (scheduled tasks and the shortcut use this path) |
+| Python + `pythonw.exe` | 3.13 | on PATH (the setup scripts find it there, or pass `-Python <path>`) |
 | Python packages | spotipy 2.26, mutagen 1.47, pywin32 312 | `python -m pip install -r requirements.txt` |
-| **yt-dlp.exe** | 2026.08.19 | the repo folder, then **its parent (`C:\common`)**, then PATH |
-| **ffmpeg.exe** | 2026-04 gyan.dev full build | same as yt-dlp |
+| **yt-dlp.exe** | 2026.08.19 | `ytdlp_path` if set, else the repo folder, then **its parent folder**, then PATH |
+| **ffmpeg.exe** | 2026-04 gyan.dev full build | `ffmpeg_path` if set, else same as yt-dlp |
 | Node.js | 24 | on PATH -- yt-dlp runs YouTube's player scripts with it |
 | iTunes | 12.13 (Microsoft Store) | COM automation; must be installed |
 | PowerShell | built into Windows | runs `yt2mp3.ps1` |
@@ -24,14 +24,40 @@ pip-installed yt-dlp.
 
 Then:
 
-1. Copy `config.example.json` to `config.json` and fill in your Spotify app's
-   client id and secret (redirect URI `http://127.0.0.1:8888/callback`).
+1. Copy `config.example.json` to `config.json`. Fill in your Spotify app's
+   client id and secret (redirect URI `http://127.0.0.1:8888/callback`), and set
+   any of the settings below that differ on your machine.
 2. `python spotify.py` once -- a browser opens to approve access; the token is
    saved to `.spotify_cache`.
 3. `python check_setup.py` -- checks every item above and says what's missing.
 4. Register the scheduled tasks: `register_task.ps1` (nightly sync) and
    `register_poll_task.ps1` (play counts every 2 hours); `make_shortcut.ps1`
-   for the desktop shortcut.
+   for the desktop shortcut. Each works from wherever the repo lives and finds
+   `pythonw.exe` on PATH; add `-DryRun` to see what it would register first.
+
+### Settings
+
+Everything machine-specific is a setting in `config.json`, read by `settings.py`
+(the Python side) and by `yt2mp3.ps1` itself. Any key left out uses the default,
+so a partial `config.json` is fine. `%USERPROFILE%`-style variables are expanded,
+and forward or back slashes both work. `python settings.py` prints every setting
+and whether it came from `config.json` or the default.
+
+| Key | Default | What it is |
+|---|---|---|
+| `library_root` | `D:\Mp3` | your music library, `<Artist>\<Album>\<file>.mp3` |
+| `staging_root` | `C:\temp\SpotifyDownloadOnTheSpot\Sorted` | where downloads land before **Move to library** |
+| `temp_root` | `C:\temp\SpotifyDownloadOnTheSpot\Tracks` | scratch space for downloads in progress |
+| `plays_path` | `%USERPROFILE%\SpotifyPoller\plays.jsonl` | the SpotifyPoller play log |
+| `history_dir` | `%USERPROFILE%\Downloads\my_spotify_data\Spotify Extended Streaming History` | Spotify's streaming-history export |
+| `ytdlp_path` | blank = repo folder, its parent, PATH | yt-dlp.exe |
+| `ffmpeg_path` | blank = repo folder, its parent, PATH | ffmpeg.exe |
+| `itunes_playlist` | `NewFromSpotify` | playlist **Move to library** adds to |
+| `contact_email` | blank | sent to MusicBrainz with `yt2mp3.ps1` lookups; it asks for one |
+
+The downloader passes `staging_root`, `temp_root` and the tool paths to
+`yt2mp3.ps1` explicitly, so downloads always land where **Move to library** and
+**Delete copy** look. They used to depend on the script's own built-in default.
 
 `config.json`, `.spotify_cache`, every `*.db` and the logs are gitignored --
 secrets and personal data stay on this machine.

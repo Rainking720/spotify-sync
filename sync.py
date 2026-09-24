@@ -141,7 +141,7 @@ def main():
 
     cfg = spotify.load_config()
     if not args.skip_index:
-        root = cfg.get("library_root", index_mp3.DEFAULT_ROOT)
+        root = index_mp3.library_root()
         if not os.path.isdir(root):
             sys.exit(f"library root not found: {root}")
         index_mp3.refresh(root)
@@ -187,7 +187,7 @@ def main():
         print(f"downloading (limit={args.limit or 'none'})"
               f"{' [pick-only]' if args.pick_only else ''}...")
         st = download.run(con, limit=args.limit,
-                          music_root=cfg.get("music_root"), dry=args.pick_only)
+                          dry=args.pick_only)
         print("")
         print("=" * 58)
         print(f"  downloaded   : {st['downloaded']}")

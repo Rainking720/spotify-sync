@@ -7,7 +7,7 @@ param(
     [string]$TempRoot  = 'C:\temp\SpotifyDownloadOnTheSpot\Tracks',
     [string]$YtDlp,
     [string]$Ffmpeg,
-    [string]$ContactEmail = 'MurphyG@bsasoftware.com',
+    [string]$ContactEmail = '',
     [string]$Artist,
     [string]$Album,
     [string]$Title,
@@ -21,7 +21,33 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$UserAgent = "yt2mp3-script/1.0 ( $ContactEmail )"
+
+# Settings from config.json beside this script -- the same file the Python side
+# reads (see settings.py). Used only for options not given on the command line,
+# so the defaults above still apply when a key is missing.
+$cfgFile = Join-Path $PSScriptRoot 'config.json'
+$cfg = $null
+if (Test-Path -LiteralPath $cfgFile) {
+    try { $cfg = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { Write-Warning "config.json could not be read: $($_.Exception.Message)" }
+}
+function Get-Setting([string]$Name) {
+    if ($cfg -and $cfg.PSObject.Properties[$Name] -and $cfg.$Name) {
+        return [Environment]::ExpandEnvironmentVariables([string]$cfg.$Name)
+    }
+    return $null
+}
+if (-not $PSBoundParameters.ContainsKey('MusicRoot') -and (Get-Setting 'staging_root')) {
+    $MusicRoot = Get-Setting 'staging_root' }
+if (-not $PSBoundParameters.ContainsKey('TempRoot') -and (Get-Setting 'temp_root')) {
+    $TempRoot = Get-Setting 'temp_root' }
+if (-not $PSBoundParameters.ContainsKey('ContactEmail') -and (Get-Setting 'contact_email')) {
+    $ContactEmail = Get-Setting 'contact_email' }
+if (-not $YtDlp  -and (Get-Setting 'ytdlp_path'))  { $YtDlp  = Get-Setting 'ytdlp_path' }
+if (-not $Ffmpeg -and (Get-Setting 'ffmpeg_path')) { $Ffmpeg = Get-Setting 'ffmpeg_path' }
+
+# MusicBrainz asks for contact details in the User-Agent; set contact_email.
+$UserAgent = if ($ContactEmail) { "yt2mp3-script/1.0 ( $ContactEmail )" } else { "yt2mp3-script/1.0" }
 
 function Resolve-Tool {
     param([string]$Explicit, [string]$Name)
@@ -42,6 +68,9 @@ $YtDlp  = Resolve-Tool -Explicit $YtDlp  -Name 'yt-dlp.exe'
 $Ffmpeg = Resolve-Tool -Explicit $Ffmpeg -Name 'ffmpeg.exe'
 Write-Verbose "yt-dlp: $YtDlp"
 Write-Verbose "ffmpeg: $Ffmpeg"
+Write-Verbose "MusicRoot: $MusicRoot"
+Write-Verbose "TempRoot: $TempRoot"
+Write-Verbose "User-Agent: $UserAgent"
 
 if ([string]::IsNullOrWhiteSpace($Url)) {
     $Url = (Read-Host -Prompt 'Paste YouTube URL').Trim()

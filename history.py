@@ -14,21 +14,13 @@ from datetime import datetime, timezone
 from norm import norm_artist, norm_title
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DIR = (r"C:\Users\MurphyG\Downloads\my_spotify_data"
-               r"\Spotify Extended Streaming History")
 MIN_MS = 60_000          # only count a play once a minute has actually been heard
 
 
 def dir_from_config():
-    cfg = {}
-    p = os.path.join(HERE, "config.json")
-    if os.path.exists(p):
-        try:
-            with open(p, encoding="utf-8") as f:
-                cfg = json.load(f)
-        except (ValueError, OSError):
-            cfg = {}
-    return cfg.get("history_dir") or DEFAULT_DIR
+    """The export folder: the history_dir setting (see settings.py)."""
+    import settings
+    return settings.get("history_dir")
 
 
 def files(directory=None):

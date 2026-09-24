@@ -13,8 +13,6 @@ something you care about.
 import json, os, shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STAGING = r"C:\temp\SpotifyDownloadOnTheSpot\Sorted"
-DEFAULT_LIBRARY = r"D:\Mp3"
 
 OK = "ok"                    # ready to move
 ALREADY = "already sorted"   # lives under the library root already
@@ -24,17 +22,9 @@ OUTSIDE = "outside staging"  # unknown location; fall back to artist/album tags
 
 
 def roots():
-    cfg = {}
-    path = os.path.join(HERE, "config.json")
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                cfg = json.load(f)
-        except (ValueError, OSError):
-            cfg = {}
-    lib = os.path.normpath(cfg.get("library_root") or DEFAULT_LIBRARY)
-    stage = os.path.normpath(cfg.get("staging_root") or DEFAULT_STAGING)
-    return lib, stage
+    """(library_root, staging_root) -- see settings.py."""
+    import settings
+    return settings.get("library_root"), settings.get("staging_root")
 
 
 def _sanitize(s):

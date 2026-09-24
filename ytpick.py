@@ -29,13 +29,12 @@ SOFT_WORDS = ["lyrics", "lyric video", "audio only", "hq", "hd audio"]
 
 
 def ytdlp_path():
-    for c in (os.path.join(HERE, "yt-dlp.exe"), r"C:\common\yt-dlp.exe"):
-        if os.path.exists(c):
-            return c
-    found = shutil.which("yt-dlp") or shutil.which("yt-dlp.exe")
+    """yt-dlp.exe: the ytdlp_path setting, else this folder, its parent, PATH."""
+    import settings
+    found = settings.ytdlp()
     if found:
         return found
-    raise FileNotFoundError("yt-dlp.exe not found")
+    raise FileNotFoundError("yt-dlp.exe not found -- set ytdlp_path in config.json")
 
 
 def search(artist, title, n=5, timeout=90):

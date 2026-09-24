@@ -34,8 +34,17 @@ def invoke(track, url, ps1=PS1, music_root=None, timeout=600):
         cmd += ["-Year", str(track["year"])]
     if track.get("cover_url"):
         cmd += ["-CoverUrl", track["cover_url"]]
-    if music_root:
-        cmd += ["-MusicRoot", music_root]
+    # Always pass the folders and tools explicitly, so yt2mp3.ps1 downloads to the
+    # same staging folder that "Move to library" later reads from. Before, it used
+    # its own built-in default and ignored the staging_root setting.
+    import settings
+    cmd += ["-MusicRoot", music_root or settings.get("staging_root"),
+            "-TempRoot", settings.get("temp_root")]
+    for flag, found in (("-YtDlp", settings.ytdlp()), ("-Ffmpeg", settings.ffmpeg())):
+        if found:
+            cmd += [flag, found]
+    if settings.get("contact_email"):
+        cmd += ["-ContactEmail", settings.get("contact_email")]
 
     # Get the final path via a UTF-8 file rather than stdout: the console encoding
     # mangles non-ASCII names, which made correct downloads of "VOILA", "BLU EYES"
