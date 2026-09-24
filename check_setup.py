@@ -37,6 +37,8 @@ def find_tool(name, key):
     if settings.get(key):
         return p, "set by " + key
     d = os.path.dirname(os.path.normcase(p))
+    if d == os.path.normcase(os.path.join(HERE, "tools")):
+        return p, "installed in the tools folder"
     if d == os.path.normcase(PARENT):
         return p, "found next to the repo"
     if d == os.path.normcase(HERE):

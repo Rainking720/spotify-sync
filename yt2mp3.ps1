@@ -55,7 +55,9 @@ function Resolve-Tool {
     # Next to the script, then its parent folder (C:\common, where yt-dlp.exe and
     # ffmpeg.exe live), and only then PATH. PATH alone would pick up a pip-installed
     # yt-dlp that is months older, and YouTube breaks old versions.
-    foreach ($dir in @($PSScriptRoot, (Split-Path -Parent $PSScriptRoot))) {
+    # tools\ first: that's where the Settings screen's "Download latest" installs.
+    foreach ($dir in @((Join-Path $PSScriptRoot 'tools'), $PSScriptRoot,
+                       (Split-Path -Parent $PSScriptRoot))) {
         $candidate = Join-Path $dir $Name
         if (Test-Path -LiteralPath $candidate) { return $candidate }
     }
@@ -173,6 +175,9 @@ try {
     # empty-string args, which breaks yt-dlp's --replace-in-metadata FIELDS REGEX REPLACE).
     $ytArgs = @(
         '--js-runtimes', 'node',
+        # Tell yt-dlp which ffmpeg to use (and its ffprobe beside it) rather than
+        # relying on it finding one on PATH or next to itself.
+        '--ffmpeg-location', (Split-Path -Parent $Ffmpeg),
         '-f', 'bestaudio',
         '-x',
         '--audio-format', 'mp3',

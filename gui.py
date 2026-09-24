@@ -1263,6 +1263,12 @@ class SettingsDialog(tk.Toplevel):
         ("contact_email", "Contact email", None, None),
     ]
     COLOURS = {"ok": "#2a7a2a", "warn": "#a86a00", "error": "#aa3333"}
+    # key: (display name, approximate download size, source shown to the user)
+    INSTALLABLE = {
+        "ytdlp_path": ("yt-dlp.exe", "about 17 MB", "the yt-dlp project's GitHub releases"),
+        "ffmpeg_path": ("ffmpeg.exe and ffprobe.exe", "about 110 MB",
+                        "gyan.dev, the Windows build ffmpeg.org links to"),
+    }
 
     def __init__(self, app):
         super().__init__(app)
@@ -1271,7 +1277,7 @@ class SettingsDialog(tk.Toplevel):
         self.transient(app)
         self.resizable(True, False)
         self.minsize(780, 0)
-        self.vars, self.status = {}, {}
+        self.vars, self.status, self.install_buttons = {}, {}, {}
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
@@ -1291,6 +1297,11 @@ class SettingsDialog(tk.Toplevel):
                            ).grid(row=row, column=2, padx=(6, 0))
             ttk.Button(body, text="Default", command=lambda k=key: self.reset(k)
                        ).grid(row=row, column=3, padx=(4, 0))
+            if key in self.INSTALLABLE:
+                b = ttk.Button(body, text="Download latest",
+                               command=lambda k=key: self.install(k))
+                b.grid(row=row, column=4, padx=(4, 0))
+                self.install_buttons[key] = b
             st = ttk.Label(body, text="", justify="left", anchor="w")
             st.grid(row=row + 1, column=1, columnspan=3, sticky="w", pady=(0, 8))
             self.status[key] = st
@@ -1337,6 +1348,65 @@ class SettingsDialog(tk.Toplevel):
                                                 filetypes=types)
         if chosen:
             self.vars[key].set(os.path.normpath(chosen))
+
+    def install(self, key):
+        """Download the latest copy into the repo's tools folder, in the background."""
+        import tools_install
+        name, size, source = self.INSTALLABLE[key]
+        if not messagebox.askyesno("Download latest", (
+                "Download {} ({}) from {} and install it into:\n\n  {}\n\n"
+                "It is checked against the SHA-256 the source publishes before it "
+                "replaces anything. Copies elsewhere (such as on your PATH) are not "
+                "changed.\n\nDownload now?").format(name, size, source,
+                                                    tools_install.TOOLS), parent=self):
+            return
+        btn = self.install_buttons[key]
+        btn.configure(state="disabled")
+        post = self.app.post
+
+        def progress(done, total):
+            if total:
+                post(self._install_progress, key, done, total)
+
+        def work():
+            try:
+                fn = (tools_install.install_ytdlp if key == "ytdlp_path"
+                      else tools_install.install_ffmpeg)
+                path, version = fn(progress)
+                post(self._installed, key, path, version, None)
+            except Exception as e:
+                post(self._installed, key, None, None, str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _install_progress(self, key, done, total):
+        if self.winfo_exists():
+            self.status[key].configure(
+                foreground="#555555",
+                text="downloading {:.1f} / {:.1f} MB ...".format(done / 1048576,
+                                                                  total / 1048576))
+
+    def _installed(self, key, path, version, error):
+        if not self.winfo_exists():
+            return
+        self.install_buttons[key].configure(state="normal")
+        name = self.INSTALLABLE[key][0]
+        if error:
+            self.check(key)
+            self.app.log("download of {} failed: {}".format(name, error))
+            messagebox.showerror("Download failed", error, parent=self)
+            return
+        self.app.log("installed {}: {}  ({})".format(name, path, version))
+        current = self.vars[key].get().strip()
+        if current and os.path.normcase(os.path.normpath(current)) != os.path.normcase(path):
+            # A path set by hand beats the tools folder, so offer to switch to it.
+            if messagebox.askyesno("Use the new copy?", (
+                    "{} is set to:\n  {}\n\nSwitch it to the copy just installed?\n  {}"
+                    ).format(name, current, path), parent=self):
+                self.vars[key].set("")      # blank = found automatically, tools first
+        self.check(key)
+        messagebox.showinfo("Installed", "{}\n{}\n\n{}".format(
+            name, version, path), parent=self)
 
     def reset(self, key):
         default = settings.DEFAULTS[key][0]

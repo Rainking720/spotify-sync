@@ -9,6 +9,9 @@ config.json
 *.db.*
 *.csv
 
+# --- downloaded programs (tools_install.py / Settings > Download latest) ----
+tools/
+
 # --- runtime output -----------------------------------------------------------
 logs/
 *.log

@@ -28,8 +28,8 @@ DEFAULTS = {
     "history_dir": (r"%USERPROFILE%\Downloads\my_spotify_data"
                     r"\Spotify Extended Streaming History",
                     "Spotify's Extended Streaming History export"),
-    "ytdlp_path": ("", "yt-dlp.exe; blank = this folder, then its parent, then PATH"),
-    "ffmpeg_path": ("", "ffmpeg.exe; blank = this folder, then its parent, then PATH"),
+    "ytdlp_path": ("", "yt-dlp.exe; blank = tools folder, this folder, its parent, PATH"),
+    "ffmpeg_path": ("", "ffmpeg.exe; blank = tools folder, this folder, its parent, PATH"),
     "itunes_playlist": ("NewFromSpotify",
                         "playlist that 'Move to library' adds songs to"),
     "contact_email": ("", "sent to MusicBrainz with lookups made by yt2mp3.ps1"),
@@ -79,8 +79,9 @@ def source(key):
 
 
 def tool(name, key):
-    """Find yt-dlp.exe / ffmpeg.exe: the configured path, else next to these
-    scripts, else their parent folder, else PATH.
+    """Find yt-dlp.exe / ffmpeg.exe: the configured path, else this repo's tools
+    folder (where tools_install.py puts them), else next to these scripts, else
+    their parent folder, else PATH.
 
     Parent before PATH on purpose: on the original machine PATH resolves to a
     pip-installed yt-dlp months older than the one in the parent folder, and
@@ -89,7 +90,7 @@ def tool(name, key):
     configured = get(key)
     if configured:
         return configured if os.path.exists(configured) else None
-    for folder in (HERE, os.path.dirname(HERE)):
+    for folder in (os.path.join(HERE, "tools"), HERE, os.path.dirname(HERE)):
         candidate = os.path.join(folder, name)
         if os.path.exists(candidate):
             return candidate

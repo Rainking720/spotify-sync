@@ -12,13 +12,22 @@ enough that a copy frozen in git would go stale -- so install them separately:
 |---|---|---|
 | Python + `pythonw.exe` | 3.13 | on PATH (the setup scripts find it there, or pass `-Python <path>`) |
 | Python packages | spotipy 2.26, mutagen 1.47, pywin32 312 | `python -m pip install -r requirements.txt` |
-| **yt-dlp.exe** | 2026.08.19 | `ytdlp_path` if set, else the repo folder, then **its parent folder**, then PATH |
+| **yt-dlp.exe** | 2026.08.19 | `ytdlp_path` if set, else `tools\`, the repo folder, **its parent folder**, then PATH |
 | **ffmpeg.exe** | 2026-04 gyan.dev full build | `ffmpeg_path` if set, else same as yt-dlp |
 | Node.js | 24 | on PATH -- yt-dlp runs YouTube's player scripts with it |
 | iTunes | 12.13 (Microsoft Store) | COM automation; must be installed |
 | PowerShell | built into Windows | runs `yt2mp3.ps1` |
 
-Keep yt-dlp current (`C:\common\yt-dlp.exe -U`): YouTube breaks old versions.
+**Settings... > Download latest** (or `python tools_install.py yt-dlp|ffmpeg|all`)
+fetches the current yt-dlp (GitHub releases, ~17 MB) or ffmpeg + ffprobe
+(gyan.dev essentials build, ~110 MB), checks each against the SHA-256 its source
+publishes, and installs it into `tools\` inside the repo (gitignored). The code
+looks in `tools\` first, so the new copy is used from then on; copies elsewhere,
+including any on PATH, are never touched. The previous copy is kept as `.old`,
+and a failed or mismatched download leaves the installed one as it was.
+`python tools_install.py --check` shows what's in use and what's latest.
+
+Keep yt-dlp current: YouTube breaks old versions.
 The parent-folder lookup exists because PATH on this machine resolves to an older
 pip-installed yt-dlp.
 
@@ -57,8 +66,8 @@ and whether it came from `config.json` or the default.
 | `temp_root` | `C:\temp\SpotifyDownloadOnTheSpot\Tracks` | scratch space for downloads in progress |
 | `plays_path` | `%USERPROFILE%\SpotifyPoller\plays.jsonl` | the SpotifyPoller play log |
 | `history_dir` | `%USERPROFILE%\Downloads\my_spotify_data\Spotify Extended Streaming History` | Spotify's streaming-history export |
-| `ytdlp_path` | blank = repo folder, its parent, PATH | yt-dlp.exe |
-| `ffmpeg_path` | blank = repo folder, its parent, PATH | ffmpeg.exe |
+| `ytdlp_path` | blank = `tools\`, repo folder, its parent, PATH | yt-dlp.exe |
+| `ffmpeg_path` | blank = `tools\`, repo folder, its parent, PATH | ffmpeg.exe |
 | `itunes_playlist` | `NewFromSpotify` | playlist **Move to library** adds to |
 | `contact_email` | blank | sent to MusicBrainz with `yt2mp3.ps1` lookups; it asks for one |
 
