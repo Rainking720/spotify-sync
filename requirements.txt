@@ -1,0 +1,6 @@
+# Python packages for spotify-sync (tested versions). Install with:
+#     python -m pip install -r requirements.txt
+# Python 3.13; tkinter and sqlite3 come with the standard Windows installer.
+spotipy>=2.26,<3
+mutagen>=1.47,<2
+pywin32>=312
