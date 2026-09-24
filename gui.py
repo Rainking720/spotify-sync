@@ -1368,13 +1368,15 @@ class SettingsDialog(tk.Toplevel):
             what = ttk.Label(self.tasks_frame, text=r["what"], foreground="#666666")
             what.grid(row=i * 2, column=0, sticky="nw", padx=(0, 12))
             summary = r["summary"]
-            if not r["script_found"]:
+            if not r["script_found"] and not r["registered"]:
                 summary += "\nregistration script not found: " + r["script"]
             st = ttk.Label(self.tasks_frame, text=summary, justify="left",
                            foreground=self.COLOURS[r["level"]], wraplength=560)
             st.grid(row=i * 2 - 1, column=1, rowspan=2, sticky="w", pady=(6, 0))
             self.task_rows += [name, what, st]
-            if r["script_found"] and (not r["registered"] or not r["current"]):
+            # a button only when there's something known to fix: missing, or
+            # registered with a different command from what its script makes now
+            if r["script_found"] and (not r["registered"] or r["current"] is False):
                 b = ttk.Button(self.tasks_frame,
                                text="Register" if not r["registered"] else "Re-register",
                                command=lambda row=r: self.register_task(row))

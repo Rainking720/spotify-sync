@@ -66,12 +66,16 @@ def live(names):
 
 
 def expected(task):
-    """What the task's script would register now, from its -DryRun."""
+    """(what the task's script would register now, from its -DryRun, or None;
+    why not, or None)."""
     if not os.path.exists(task["script"]):
-        return None
-    p = procutil.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                      "-File", task["script"], "-DryRun"], capture_output=True,
-                     text=True, encoding="utf-8", errors="replace", timeout=60)
+        return None, "registration script not found: " + task["script"]
+    try:
+        p = procutil.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                          "-File", task["script"], "-DryRun"], capture_output=True,
+                         text=True, encoding="utf-8", errors="replace", timeout=60)
+    except Exception as e:
+        return None, "couldn't run its registration script: " + str(e)
     got = {}
     for line in (p.stdout or "").splitlines():
         if ":" in line:
@@ -79,7 +83,11 @@ def expected(task):
             k = k.strip()
             if k in ("execute", "arguments", "working dir"):
                 got[k] = v.strip()
-    return got or None
+    if len(got) == 3:
+        return got, None
+    said = ((p.stderr or "") + (p.stdout or "")).strip().splitlines()
+    return None, "couldn't check it against its registration script" + (
+        ": " + said[0].strip() if said else " (exit code {})".format(p.returncode))
 
 
 def _same(a, b):
@@ -100,7 +108,7 @@ def status_all():
     for t in ts:
         row = dict(t)
         row["script_found"] = os.path.exists(t["script"])
-        row["expected"] = expected(t) if row["script_found"] else None
+        row["expected"], why = expected(t)
         info = have.get(t["name"])
         row["registered"] = bool(info)
         if not info:
@@ -109,7 +117,8 @@ def status_all():
             out.append(row)
             continue
         exp = row["expected"] or {}
-        row["current"] = bool(exp) and all((
+        # current: True/False when compared, None when the comparison couldn't run
+        row["current"] = None if not exp else all((
             _same(info["execute"], exp.get("execute")),
             _same(info["arguments"], exp.get("arguments")),
             _same(info["workdir"], exp.get("working dir"))))
@@ -123,9 +132,12 @@ def status_all():
             level = "warn"
         if result not in (0, 0x41301, 0x41303):
             level = "warn"
-        if row["expected"] and not row["current"]:
+        if row["current"] is False:
             level = "warn"
             parts.append("points at " + (info["arguments"] or info["execute"]))
+        if why:
+            level = "warn"
+            parts.append(why)
         row.update(level=level, summary="  |  ".join(parts), info=info)
         out.append(row)
     return out
