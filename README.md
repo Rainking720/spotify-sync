@@ -43,6 +43,9 @@ Then:
    `register_poll_task.ps1` (play counts every 2 hours); `make_shortcut.ps1`
    for the desktop shortcut. Each works from wherever the repo lives and finds
    `pythonw.exe` on PATH; add `-DryRun` to see what it would register first.
+   Or open **Settings...** in the GUI: its *Scheduled tasks* section shows all
+   three tasks (including SpotifyPoller's) and has a **Register** button for any
+   that are missing.
 
 ### Settings
 
@@ -206,6 +209,15 @@ A lock file (`.sync.lock`, stale after 6h) stops runs overlapping.
 
 To change the time, re-run `register_task.ps1` after editing the trigger, or edit
 the task in Task Scheduler directly.
+
+**Settings...** in the GUI lists the three tasks this setup relies on -- this one,
+"Spotify Plays to iTunes" and SpotifyPoller's "SpotifyPlayTracker" -- with each
+one's state, last run and result, and next run (`python tasks.py` prints the same).
+A task that is missing gets a **Register** button. One that exists but runs a
+different command from what its script would register now (say the folder
+moved) is flagged in amber with **Re-register**. Both buttons ask first, then
+run the task's own registration script, so the schedule is defined in one place.
+SpotifyPoller is looked for in the folder holding the *SpotifyPoller play log*.
 
 ## GUI
 

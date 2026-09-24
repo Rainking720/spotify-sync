@@ -1310,6 +1310,19 @@ class SettingsDialog(tk.Toplevel):
             row += 2
         body.columnconfigure(1, weight=1)
 
+        # ---- scheduled tasks: status, and registration where missing or stale
+        self.tasks_frame = ttk.LabelFrame(self, text="Scheduled tasks", padding=8)
+        self.tasks_frame.pack(fill="x", padx=12, pady=(0, 10))
+        self.tasks_frame.columnconfigure(1, weight=1)
+        self.task_note = ttk.Label(self.tasks_frame, text="checking Task Scheduler...",
+                                   foreground="#555555")
+        self.task_note.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.b_tasks = ttk.Button(self.tasks_frame, text="Refresh",
+                                  command=self.load_tasks)
+        self.b_tasks.grid(row=0, column=2, sticky="e")
+        self.task_rows = []
+        self.load_tasks()
+
         foot = ttk.Frame(self, padding=(12, 0, 12, 12))
         foot.pack(fill="x")
         ttk.Label(foot, text="Spotify credentials live in config.json and aren't "
@@ -1319,6 +1332,87 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(foot, text="Cancel", command=self.destroy).pack(side="right")
         ttk.Button(foot, text="Save", command=self.save).pack(side="right", padx=6)
         self.grab_set()
+
+    # ------------------------------------------------------------ tasks
+    def load_tasks(self):
+        import tasks
+        self.b_tasks.configure(state="disabled")
+        self.task_note.configure(text="checking Task Scheduler...")
+        post = self.app.post
+
+        def work():
+            try:
+                post(self._tasks_loaded, tasks.status_all(), None)
+            except Exception as e:
+                post(self._tasks_loaded, [], str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _tasks_loaded(self, rows, error):
+        if not self.winfo_exists():
+            return
+        self.b_tasks.configure(state="normal")
+        for w in self.task_rows:
+            w.destroy()
+        self.task_rows = []
+        if error:
+            self.task_note.configure(text="couldn't read Task Scheduler: " + error)
+            return
+        bad = sum(1 for r in rows if r["level"] != "ok")
+        self.task_note.configure(
+            text="All three are registered and up to date." if not bad else
+            "{} of {} need attention.".format(bad, len(rows)))
+        for i, r in enumerate(rows, start=1):
+            name = ttk.Label(self.tasks_frame, text=r["name"], font=("Segoe UI", 9, "bold"))
+            name.grid(row=i * 2 - 1, column=0, sticky="nw", pady=(6, 0), padx=(0, 12))
+            what = ttk.Label(self.tasks_frame, text=r["what"], foreground="#666666")
+            what.grid(row=i * 2, column=0, sticky="nw", padx=(0, 12))
+            summary = r["summary"]
+            if not r["script_found"]:
+                summary += "\nregistration script not found: " + r["script"]
+            st = ttk.Label(self.tasks_frame, text=summary, justify="left",
+                           foreground=self.COLOURS[r["level"]], wraplength=560)
+            st.grid(row=i * 2 - 1, column=1, rowspan=2, sticky="w", pady=(6, 0))
+            self.task_rows += [name, what, st]
+            if r["script_found"] and (not r["registered"] or not r["current"]):
+                b = ttk.Button(self.tasks_frame,
+                               text="Register" if not r["registered"] else "Re-register",
+                               command=lambda row=r: self.register_task(row))
+                b.grid(row=i * 2 - 1, column=2, rowspan=2, sticky="e", pady=(6, 0))
+                self.task_rows.append(b)
+
+    def register_task(self, row):
+        import tasks
+        verb = "Register" if not row["registered"] else "Re-register"
+        exp = row.get("expected") or {}
+        if not messagebox.askyesno(verb + " task", (
+                "{} the scheduled task \"{}\"?\n\nIt {}, running as you while "
+                "you're logged in, with no window.\n\nRuns: {} {}\nIn: {}{}").format(
+                    verb, row["name"], row["what"], exp.get("execute", ""),
+                    exp.get("arguments", ""), exp.get("working dir", ""),
+                    "\n\nThis replaces the existing task of that name."
+                    if row["registered"] else ""), parent=self):
+            return
+        self.b_tasks.configure(state="disabled")
+        post = self.app.post
+
+        def work():
+            try:
+                ok, msg = tasks.register(row)
+            except Exception as e:
+                ok, msg = False, str(e)
+            post(self._task_registered, row, ok, msg)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _task_registered(self, row, ok, msg):
+        if not self.winfo_exists():
+            return
+        self.app.log(("registered " if ok else "couldn't register ") + row["name"] +
+                     (": " + msg.splitlines()[-1] if msg else ""))
+        if not ok:
+            messagebox.showerror("Couldn't register", msg or "unknown error", parent=self)
+        self.load_tasks()
 
     def describe(self, key):
         default = settings.DEFAULTS[key][0]

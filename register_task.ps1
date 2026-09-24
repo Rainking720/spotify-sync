@@ -1,6 +1,5 @@
-param([string]$Python, [switch]$DryRun)   # -DryRun: show what would be registered
+param([string]$Python, [string]$TaskName = 'Spotify Liked Sync', [switch]$DryRun)   # -DryRun: show what would be registered
 $ErrorActionPreference = 'Stop'
-$TaskName = 'Spotify Liked Sync'
 # This script's own folder, so the repo can live anywhere.
 $Dir = $PSScriptRoot
 # pythonw.exe (no console window): -Python if given, else the one on PATH.
