@@ -50,8 +50,12 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Spotify Sync - Review Queue")
-        self.geometry("1180x740")
-        self.minsize(940, 580)
+        # Big enough for the full song list beside the track panel, but never
+        # larger than the screen.
+        w = min(1400, self.winfo_screenwidth() - 60)
+        h = min(860, self.winfo_screenheight() - 80)
+        self.geometry("{}x{}".format(w, h))
+        self.minsize(min(1080, w), min(620, h))   # never above the screen size
         self.items, self.cands, self.busy = [], [], False
         # The selection the user actually made, kept separately from the tree so
         # it survives redraws and rows being hidden by the Find filter.
@@ -95,106 +99,149 @@ class App(tk.Tk):
         pane = ttk.PanedWindow(self, orient="horizontal")
         pane.pack(fill="both", expand=True, padx=8, pady=(0, 6))
 
+        # ---------------- left: the song list, and actions on its selection
         left = ttk.Frame(pane)
+        lf = ttk.Frame(left)
+        lf.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(
-            left, columns=("status", "where", "artist", "title", "plays", "last"),
+            lf, columns=("status", "where", "artist", "title", "plays", "last"),
             show="headings", selectmode="extended")
         self._head_text = {}
-        for c, w, t in (("status", 84, "Status"), ("where", 62, "File"),
-                        ("artist", 132, "Artist"), ("title", 176, "Title"),
-                        ("plays", 44, "Plays"), ("last", 104, "Last played")):
+        # Short fixed-width columns don't stretch, so Plays and Last played stay
+        # visible; Artist and Title take whatever width is left.
+        for c, w, t, grow in (("status", 80, "Status", False),
+                              ("where", 64, "File", False),
+                              ("artist", 130, "Artist", True),
+                              ("title", 170, "Title", True),
+                              ("plays", 46, "Plays", False),
+                              ("last", 108, "Last played", False)):
             self._head_text[c] = t
             self.tree.heading(c, text=t, command=lambda c=c: self.sort_by(c))
-            self.tree.column(c, width=w, anchor="w")
-        sb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+            self.tree.column(c, width=w, minwidth=40 if not grow else 80,
+                             stretch=grow, anchor="w")
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(lf, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=sb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        lf.rowconfigure(0, weight=1)
+        lf.columnconfigure(0, weight=1)
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
         # Snapshot only on real user input: <<TreeviewSelect>> also fires when a
         # redraw re-applies the selection, which would make it forget itself.
         self.tree.bind("<ButtonRelease-1>", self._remember_selection)
         self.tree.bind("<KeyRelease>", self._remember_selection)
+
+        # These act on every song selected in the list, so they sit under it.
+        sel = ttk.LabelFrame(left, text="Selected songs  (Ctrl/Shift-click for several)",
+                             padding=6)
+        sel.pack(fill="x", side="bottom", pady=(6, 0), before=lf)
+        ttk.Button(sel, text="Move to library",
+                   command=self.move_to_library).grid(row=0, column=0, sticky="w")
+        self.to_itunes = tk.BooleanVar(value=True)
+        ttk.Checkbutton(sel, text="also add to iTunes \"" + ITUNES_PLAYLIST + "\"",
+                        variable=self.to_itunes).grid(row=0, column=1, sticky="w",
+                                                      padx=(8, 0))
+        ttk.Button(sel, text="Delete copy (already owned)",
+                   command=self.discard_copies).grid(row=1, column=0, sticky="w",
+                                                     pady=(4, 0))
+        ttk.Label(sel, text="the Delete key does the same", foreground="#666666"
+                  ).grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
         pane.add(left, weight=1)
 
+        # ---------------- right: the track in focus
         right = ttk.Frame(pane)
-        pane.add(right, weight=2)
+        pane.add(right, weight=1)
 
         self.detail = ttk.Label(right, text="Select a track", justify="left",
                                 anchor="w", font=("Segoe UI", 10, "bold"))
         self.detail.pack(fill="x", pady=(0, 2))
         self.why = ttk.Label(right, text="", justify="left", anchor="w",
-                             foreground="#aa3333", wraplength=720)
+                             foreground="#aa3333", wraplength=640)
         self.why.pack(fill="x", pady=(0, 6))
+
+        tf = ttk.LabelFrame(right, text="This track", padding=6)
+        tf.pack(fill="x")
+        for col, (text, cmd) in enumerate((
+                ("Skip", self.do_skip), ("Put back", self.do_requeue),
+                ("Link to iTunes...", self.link_itunes),
+                ("Browse artist...", self.browse_artist),
+                ("Show album...", self.show_album))):
+            ttk.Button(tf, text=text, command=cmd).grid(
+                row=0, column=col, padx=(0 if col == 0 else 4, 0), sticky="w")
 
         box = ttk.LabelFrame(
             right, text="Search terms (correct these if the search looks wrong)",
             padding=6)
-        box.pack(fill="x")
+        box.pack(fill="x", pady=(6, 0))
         self.f_artist, self.f_title = tk.StringVar(), tk.StringVar()
         ttk.Label(box, text="Artist").grid(row=0, column=0, sticky="w")
-        ttk.Entry(box, textvariable=self.f_artist, width=30).grid(row=0, column=1, padx=4)
+        ttk.Entry(box, textvariable=self.f_artist, width=24).grid(
+            row=0, column=1, padx=4, sticky="we")
         ttk.Label(box, text="Title").grid(row=0, column=2, sticky="w")
-        ttk.Entry(box, textvariable=self.f_title, width=36).grid(row=0, column=3, padx=4)
+        ttk.Entry(box, textvariable=self.f_title, width=30).grid(
+            row=0, column=3, padx=4, sticky="we")
         self.b_search = ttk.Button(box, text="Search YouTube", command=self.do_search)
-        self.b_search.grid(row=0, column=4, padx=(8, 0))
+        self.b_search.grid(row=0, column=4, padx=(4, 0))
+        box.columnconfigure(1, weight=1)
+        box.columnconfigure(3, weight=2)
         self.ignore_dur = tk.BooleanVar(value=False)
         ttk.Checkbutton(box, text="show candidates outside the duration filter",
                         variable=self.ignore_dur).grid(row=1, column=1, columnspan=3,
                                                        sticky="w", pady=(4, 0))
 
-        cf = ttk.LabelFrame(right, text="Candidates (double-click to download)", padding=6)
+        cf = ttk.LabelFrame(right, text="Candidates", padding=6)
         cf.pack(fill="both", expand=True, pady=6)
+        ctf = ttk.Frame(cf)
+        ctf.pack(fill="both", expand=True)
         self.ctree = ttk.Treeview(
-            cf, columns=("score", "dur", "delta", "channel", "vtitle"),
+            ctf, columns=("score", "dur", "delta", "channel", "vtitle"),
             show="headings", selectmode="browse")
-        for c, w, t in (("score", 52, "Score"), ("dur", 58, "Len"),
-                        ("delta", 60, "Diff"), ("channel", 160, "Channel"),
-                        ("vtitle", 330, "Video title")):
+        for c, w, t, grow in (("score", 50, "Score", False), ("dur", 54, "Len", False),
+                              ("delta", 54, "Diff", False),
+                              ("channel", 150, "Channel", True),
+                              ("vtitle", 300, "Video title", True)):
             self.ctree.heading(c, text=t)
-            self.ctree.column(c, width=w, anchor="w")
-        cs = ttk.Scrollbar(cf, orient="vertical", command=self.ctree.yview)
+            self.ctree.column(c, width=w, minwidth=40, stretch=grow, anchor="w")
+        cs = ttk.Scrollbar(ctf, orient="vertical", command=self.ctree.yview)
         self.ctree.configure(yscrollcommand=cs.set)
         self.ctree.pack(side="left", fill="both", expand=True)
         cs.pack(side="right", fill="y")
         self.ctree.bind("<Double-1>", lambda e: self.download_selected())
-
-        af = ttk.Frame(right)
-        af.pack(fill="x")
-        ttk.Button(af, text="Download selected",
+        cb2 = ttk.Frame(cf)
+        cb2.pack(fill="x", side="bottom", pady=(6, 0), before=ctf)
+        ttk.Button(cb2, text="Download selected",
                    command=self.download_selected).pack(side="left")
-        ttk.Button(af, text="Open in browser",
+        ttk.Button(cb2, text="Open in browser",
                    command=self.open_selected).pack(side="left", padx=4)
-        ttk.Button(af, text="Skip", command=self.do_skip).pack(side="left", padx=(16, 0))
-        ttk.Button(af, text="Put back", command=self.do_requeue).pack(side="left", padx=4)
-        ttk.Button(af, text="Show album...",
-                   command=self.show_album).pack(side="right")
-        ttk.Button(af, text="Browse artist...",
-                   command=self.browse_artist).pack(side="right", padx=4)
-        ttk.Button(af, text="Link to iTunes...",
-                   command=self.link_itunes).pack(side="right")
-        ttk.Button(af, text="Move to library",
-                   command=self.move_to_library).pack(side="left", padx=(16, 0))
-        self.to_itunes = tk.BooleanVar(value=True)
-        ttk.Checkbutton(af, text="+ iTunes \"" + ITUNES_PLAYLIST + "\"",
-                        variable=self.to_itunes).pack(side="left", padx=4)
-        ttk.Button(af, text="Delete copy (already owned)",
-                   command=self.discard_copies).pack(side="left", padx=(12, 0))
+        ttk.Label(cb2, text="or double-click a candidate", foreground="#666666"
+                  ).pack(side="left", padx=(8, 0))
 
-        uf = ttk.Frame(right)
-        uf.pack(fill="x", pady=(6, 0))
-        ttk.Label(uf, text="Or paste a YouTube URL:").pack(side="left")
+        uf = ttk.LabelFrame(right, text="A specific YouTube video", padding=6)
+        uf.pack(fill="x", side="bottom", before=cf)
         self.f_url = tk.StringVar()
-        ttk.Entry(uf, textvariable=self.f_url).pack(side="left", fill="x",
-                                                    expand=True, padx=4)
-        ttk.Button(uf, text="Download this URL",
-                   command=self.download_url).pack(side="left")
-        ttk.Button(uf, text="Add song by URL...",
-                   command=self.add_song_by_url).pack(side="left", padx=(6, 0))
+        ttk.Label(uf, text="URL").grid(row=0, column=0, sticky="w")
+        ttk.Entry(uf, textvariable=self.f_url).grid(row=0, column=1, sticky="we",
+                                                    padx=4)
+        # "for this track": it is saved under the selected track's name, which is
+        # what mislabelled two Forest Blakk songs when this read "Download this URL".
+        ttk.Button(uf, text="Download for this track",
+                   command=self.download_url).grid(row=0, column=2)
+        ttk.Label(uf, text="Not in the list at all?", foreground="#666666"
+                  ).grid(row=1, column=1, sticky="e", padx=4, pady=(4, 0))
+        ttk.Button(uf, text="Add a new song by URL...",
+                   command=self.add_song_by_url).grid(row=1, column=2, sticky="we",
+                                                       pady=(4, 0))
+        uf.columnconfigure(1, weight=1)
 
-        self.logbox = tk.Text(self, height=7, wrap="word", state="disabled",
+        # Start with the list wide enough to show every column.
+        self.after(60, lambda: pane.sashpos(0, 640))
+
+        self.logbox = tk.Text(self, height=6, wrap="word", state="disabled",
                               font=("Consolas", 9))
-        self.logbox.pack(fill="x", padx=8, pady=(0, 8))
+        # Reserved before the panes: otherwise a short window pushes the log off.
+        self.logbox.pack(fill="x", side="bottom", padx=8, pady=(0, 8), before=pane)
 
         # Bound on the window, not the list: after the confirm dialog closes,
         # focus no longer sits on the tree, so a tree-only binding silently

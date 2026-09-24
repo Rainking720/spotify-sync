@@ -182,14 +182,21 @@ at the cost of the odd loose hit (`long day` also matches "Divided By **Frida**y
 since "Friday" contains "day"). Escape or **Clear** empties it. Filtering redraws
 the rows already in memory, so there's no query per keystroke.
 
-The list is multi-select (shift/ctrl-click) for the move and iTunes actions.
+The list is multi-select (shift/ctrl-click). Controls are grouped by what they act
+on: **Selected songs** under the list (Move to library, Delete copy) works on every
+selected row; **This track** (Skip, Put back, Link to iTunes, Browse artist, Show
+album) works on the one shown on the right; the candidate buttons sit inside the
+**Candidates** box. Fixed-height panels are packed before the two lists, so a
+small window shrinks the lists rather than hiding buttons.
 
 * **Search terms** are pre-filled and editable -- fix a misspelled artist, drop a
   "- Acoustic" suffix, whatever helps -- then **Search YouTube** for fresh results.
   Results move on, so a re-search often finds videos the original run never saw.
 * **Candidates** show score, length and the difference from Spotify's duration.
   Double-click to download, or **Open in browser** to check one first.
-* **Paste a YouTube URL** to use a specific video the search can't find.
+* **A specific YouTube video** box: paste a URL and click **Download for this
+  track** to use a video the search can't find. It is saved under the selected
+  track's name, so for a song that isn't in the list use **Add a new song by URL...**.
 * **Skip** drops a track; **Put back** returns a skipped one to the queue.
 
 Whatever is in the Artist/Title fields when you download is what gets written to
@@ -314,7 +321,7 @@ it bothers you.
 
 ## iTunes
 
-The **+ iTunes "NewFromSpotify"** checkbox beside **Move to library** adds each
+The **also add to iTunes "NewFromSpotify"** checkbox beside **Move to library** adds each
 promoted file to the iTunes library and that playlist. Files move first; only the
 ones that actually landed are added, so conflicts and skips never get added.
 
