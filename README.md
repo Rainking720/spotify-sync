@@ -218,6 +218,10 @@ different command from what its script would register now (say the folder
 moved) is flagged in amber with **Re-register**. Both buttons ask first, then
 run the task's own registration script, so the schedule is defined in one place.
 SpotifyPoller is looked for in the folder holding the *SpotifyPoller play log*.
+The two tasks from this repo are registered with the `pythonw.exe` of the Python
+the GUI is running on (the one with this project's packages), not whichever
+`pythonw.exe` comes first on PATH -- the Store's app alias or the Python install
+manager can put others there.
 
 ## GUI
 

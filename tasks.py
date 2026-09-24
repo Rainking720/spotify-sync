@@ -7,7 +7,7 @@ module only asks Task Scheduler what exists and runs those scripts. "Expected"
 means what the script would register now -- read from its -DryRun output, so
 there is one definition of each task, not two that could drift apart.
 """
-import json, os, subprocess
+import json, os, subprocess, sys
 
 import procutil
 
@@ -20,14 +20,31 @@ def poller_dir():
     return os.path.dirname(settings.get("plays_path"))
 
 
+def pythonw():
+    """pythonw.exe of the Python running this -- the one with this project's
+    packages installed. PATH can hold others (the Store's app alias, the
+    Python install manager's), so the task scripts are told which one to use
+    rather than left to find one."""
+    p = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    return p if os.path.exists(p) else None
+
+
+def _script_cmd(task, *extra):
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", task["script"]]
+    if task.get("takes_python") and pythonw():
+        cmd += ["-Python", pythonw()]
+    return cmd + list(extra)
+
+
 def tasks():
     return [
         {"name": "Spotify Liked Sync",
          "what": "downloads newly liked songs, nightly at 03:00",
-         "script": os.path.join(HERE, "register_task.ps1")},
+         "script": os.path.join(HERE, "register_task.ps1"), "takes_python": True},
         {"name": "Spotify Plays to iTunes",
          "what": "adds new Spotify plays to iTunes, every 2 hours at :03",
-         "script": os.path.join(HERE, "register_poll_task.ps1")},
+         "script": os.path.join(HERE, "register_poll_task.ps1"), "takes_python": True},
         {"name": "SpotifyPlayTracker",
          "what": "logs your Spotify plays, every 2 hours at :48",
          "script": os.path.join(poller_dir(), "register_task.ps1")},
@@ -71,8 +88,7 @@ def expected(task):
     if not os.path.exists(task["script"]):
         return None, "registration script not found: " + task["script"]
     try:
-        p = procutil.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                          "-File", task["script"], "-DryRun"], capture_output=True,
+        p = procutil.run(_script_cmd(task, "-DryRun"), capture_output=True,
                          text=True, encoding="utf-8", errors="replace", timeout=60)
     except Exception as e:
         return None, "couldn't run its registration script: " + str(e)
@@ -147,10 +163,7 @@ def register(task, task_name=None):
     """Run the task's own registration script. Returns (ok, message)."""
     if not os.path.exists(task["script"]):
         return False, "registration script not found: " + task["script"]
-    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-           "-File", task["script"]]
-    if task_name:
-        cmd += ["-TaskName", task_name]
+    cmd = _script_cmd(task, *(["-TaskName", task_name] if task_name else []))
     p = procutil.run(cmd, capture_output=True, text=True, encoding="utf-8",
                      errors="replace", timeout=120)
     msg = ((p.stdout or "") + (p.stderr or "")).strip()
