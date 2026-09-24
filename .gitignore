@@ -1,0 +1,22 @@
+# --- secrets: never commit ---------------------------------------------------
+# Spotify client id/secret (see config.example.json)
+config.json
+# Spotify OAuth refresh token
+.spotify_cache
+
+# --- personal data: changes constantly, lives only on this machine -----------
+*.db
+*.db.*
+*.csv
+
+# --- runtime output -----------------------------------------------------------
+logs/
+*.log
+*.lock
+.sync.lock
+.poll_itunes.lock
+.itunes_apply.lock
+*.bak
+*.tmp
+__pycache__/
+*.pyc

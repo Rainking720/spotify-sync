@@ -1,0 +1,9 @@
+{
+  "client_id": "your Spotify app's client id",
+  "client_secret": "your Spotify app's client secret",
+  "redirect_uri": "http://127.0.0.1:8888/callback",
+  "library_root": "D:/Mp3",
+  "staging_root": "C:/temp/SpotifyDownloadOnTheSpot/Sorted",
+  "plays_path": "C:/Users/MurphyG/SpotifyPoller/plays.jsonl",
+  "history_dir": "C:/Users/MurphyG/Downloads/my_spotify_data/Spotify Extended Streaming History"
+}
