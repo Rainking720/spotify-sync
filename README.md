@@ -37,6 +37,13 @@ Then:
 
 ### Settings
 
+The easy way to change them is **Settings...** in the GUI toolbar: each box shows
+the value in effect, with **Browse...** and **Default** buttons, and is checked as
+you type (a missing music library or a mistyped yt-dlp path blocks saving unless
+you confirm). Saving rewrites only these keys, keeps the Spotify credentials in
+the file untouched, and leaves the previous file as `config.json.bak`. Changes
+apply without restarting -- the scheduled jobs read the file on every run.
+
 Everything machine-specific is a setting in `config.json`, read by `settings.py`
 (the Python side) and by `yt2mp3.ps1` itself. Any key left out uses the default,
 so a partial `config.json` is fine. `%USERPROFILE%`-style variables are expanded,

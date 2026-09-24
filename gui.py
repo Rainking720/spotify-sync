@@ -15,7 +15,9 @@ import download, plays, ytpick
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(HERE, "sync.db")
 import settings
-ITUNES_PLAYLIST = settings.get("itunes_playlist")
+def itunes_playlist():
+    """Read on use, so a change made in Settings applies without a restart."""
+    return settings.get("itunes_playlist")
 COLS = ["track_id", "artist", "title", "album", "duration_ms",
         "track_number", "year", "cover_url"]
 FILTERS = {
@@ -67,6 +69,7 @@ class App(tk.Tk):
         self._sort_changed = False
         self.msgq = queue.Queue()
         self._build()
+        self.refresh_labels()
         self.reload()
         self.after(100, self._drain)
 
@@ -91,6 +94,8 @@ class App(tk.Tk):
         # Filters the loaded rows in memory; no database round-trip per keystroke.
         self.q.trace_add("write", lambda *a: self.render())
 
+        ttk.Button(bar, text="Settings...",
+                   command=self.open_settings).pack(side="right", padx=(0, 12))
         ttk.Button(bar, text="Play counts -> iTunes...",
                    command=self.open_catchup).pack(side="left", padx=(14, 0))
 
@@ -141,7 +146,8 @@ class App(tk.Tk):
         ttk.Button(sel, text="Move to library",
                    command=self.move_to_library).grid(row=0, column=0, sticky="w")
         self.to_itunes = tk.BooleanVar(value=True)
-        ttk.Checkbutton(sel, text="also add to iTunes \"" + ITUNES_PLAYLIST + "\"",
+        self.itunes_label = tk.StringVar()
+        ttk.Checkbutton(sel, textvariable=self.itunes_label,
                         variable=self.to_itunes).grid(row=0, column=1, sticky="w",
                                                       padx=(8, 0))
         ttk.Button(sel, text="Delete copy (already owned)",
@@ -686,6 +692,13 @@ class App(tk.Tk):
     def open_catchup(self):
         CatchUpDialog(self)
 
+    def open_settings(self):
+        SettingsDialog(self)
+
+    def refresh_labels(self):
+        """Re-read settings shown in the window's own labels."""
+        self.itunes_label.set('also add to iTunes "' + itunes_playlist() + '"')
+
     def link_itunes(self):
         t = self.current()
         if not t:
@@ -759,7 +772,7 @@ class App(tk.Tk):
                     import itunes
                     self.post(self._progress_msg,
                               "adding {} file(s) to iTunes...".format(len(paths)))
-                    itunes_result = itunes.add_many(paths, ITUNES_PLAYLIST)
+                    itunes_result = itunes.add_many(paths, itunes_playlist())
                 except Exception as e:
                     # The move succeeded; an iTunes problem must not undo that.
                     itunes_result = (0, [("", str(e))], [])
@@ -889,7 +902,7 @@ class App(tk.Tk):
             self.log("  ERROR {}: {}".format(e["track"].get("title"), err))
         if itunes_result is not None:
             added, ierrors, copied = itunes_result
-            self.log('  iTunes: added {} to "{}"'.format(added, ITUNES_PLAYLIST))
+            self.log('  iTunes: added {} to "{}"'.format(added, itunes_playlist()))
             for p, err in ierrors[:6]:
                 self.log("    iTunes ERROR {}: {}".format(os.path.basename(p or ""), err))
             if copied:
@@ -1226,6 +1239,134 @@ class LinkDialog(tk.Toplevel):
             self.track["artist"], self.track["title"]))
         self.show_current()
         self.status.configure(text="link removed")
+
+
+class SettingsDialog(tk.Toplevel):
+    """Edit the machine-specific settings stored in config.json.
+
+    The Spotify credentials in the same file are never shown or touched here.
+    Values are checked as you type; problems that would break a run block saving
+    unless you confirm.
+    """
+
+    # key: (label, browse kind, file types)
+    FIELDS = [
+        ("library_root", "Music library", "dir", None),
+        ("staging_root", "Download folder", "dir", None),
+        ("temp_root", "Temporary folder", "dir", None),
+        ("plays_path", "SpotifyPoller play log", "file",
+         [("Play log", "*.jsonl"), ("All files", "*.*")]),
+        ("history_dir", "Streaming history export", "dir", None),
+        ("ytdlp_path", "yt-dlp.exe", "file", [("yt-dlp", "yt-dlp*.exe"), ("Programs", "*.exe")]),
+        ("ffmpeg_path", "ffmpeg.exe", "file", [("ffmpeg", "ffmpeg*.exe"), ("Programs", "*.exe")]),
+        ("itunes_playlist", "iTunes playlist", None, None),
+        ("contact_email", "Contact email", None, None),
+    ]
+    COLOURS = {"ok": "#2a7a2a", "warn": "#a86a00", "error": "#aa3333"}
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Settings")
+        self.transient(app)
+        self.resizable(True, False)
+        self.minsize(780, 0)
+        self.vars, self.status = {}, {}
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Paths and options for this computer. Leave a box as its "
+                  "default unless something lives elsewhere on this machine.",
+                  foreground="#555555").grid(row=0, column=0, columnspan=4, sticky="w",
+                                             pady=(0, 10))
+        row = 1
+        for key, label, kind, types in self.FIELDS:
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8))
+            var = tk.StringVar(value=settings.get(key))
+            self.vars[key] = var
+            ttk.Entry(body, textvariable=var, width=70).grid(row=row, column=1, sticky="we")
+            if kind:
+                ttk.Button(body, text="Browse...",
+                           command=lambda k=key, kd=kind, ty=types: self.browse(k, kd, ty)
+                           ).grid(row=row, column=2, padx=(6, 0))
+            ttk.Button(body, text="Default", command=lambda k=key: self.reset(k)
+                       ).grid(row=row, column=3, padx=(4, 0))
+            st = ttk.Label(body, text="", justify="left", anchor="w")
+            st.grid(row=row + 1, column=1, columnspan=3, sticky="w", pady=(0, 8))
+            self.status[key] = st
+            var.trace_add("write", lambda *a, k=key: self.check(k))
+            self.check(key)
+            row += 2
+        body.columnconfigure(1, weight=1)
+
+        foot = ttk.Frame(self, padding=(12, 0, 12, 12))
+        foot.pack(fill="x")
+        ttk.Label(foot, text="Spotify credentials live in config.json and aren't "
+                  "edited here.", foreground="#555555").pack(side="left")
+        ttk.Button(foot, text="Open folder",
+                   command=lambda: os.startfile(settings.HERE)).pack(side="left", padx=6)
+        ttk.Button(foot, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(foot, text="Save", command=self.save).pack(side="right", padx=6)
+        self.grab_set()
+
+    def describe(self, key):
+        default = settings.DEFAULTS[key][0]
+        what = settings.DEFAULTS[key][1]
+        return what + ("  (default: " + default + ")" if default else "  (default: blank)")
+
+    def check(self, key):
+        value = self.vars[key].get().strip()
+        level, msg = settings.validate(key, value)
+        mark = {"ok": "OK", "warn": "Check", "error": "Problem"}[level]
+        text = self.describe(key)
+        if msg:
+            text = mark + ": " + msg + "\n" + text
+        self.status[key].configure(text=text, foreground=self.COLOURS[level]
+                                   if msg else "#666666")
+        return level, msg
+
+    def browse(self, key, kind, types):
+        from tkinter import filedialog
+        current = self.vars[key].get().strip()
+        start = current if os.path.isdir(current) else os.path.dirname(current)
+        if kind == "dir":
+            chosen = filedialog.askdirectory(parent=self, initialdir=start or None,
+                                             title="Choose the " + key.replace("_", " "))
+        else:
+            chosen = filedialog.askopenfilename(parent=self, initialdir=start or None,
+                                                filetypes=types)
+        if chosen:
+            self.vars[key].set(os.path.normpath(chosen))
+
+    def reset(self, key):
+        default = settings.DEFAULTS[key][0]
+        self.vars[key].set(os.path.normpath(os.path.expandvars(default))
+                           if default and key in settings.PATH_KEYS else default)
+
+    def save(self):
+        problems = []
+        for key, label, _k, _t in self.FIELDS:
+            level, msg = self.check(key)
+            if level == "error":
+                problems.append("{}: {}".format(label, msg))
+        if problems and not messagebox.askyesno(
+                "Save with problems?",
+                "These would stop parts of the program working:\n\n  " +
+                "\n  ".join(problems) + "\n\nSave anyway?", parent=self):
+            return
+        try:
+            changed = settings.save({k: v.get() for k, v in self.vars.items()})
+        except Exception as e:
+            messagebox.showerror("Couldn't save", str(e), parent=self)
+            return
+        if changed:
+            self.app.log("settings saved: " + ", ".join(changed) +
+                         "   (previous config.json kept as config.json.bak)")
+            self.app.refresh_labels()
+            self.app.reload()
+        else:
+            self.app.log("settings: nothing changed")
+        self.destroy()
 
 
 class AddSongDialog(tk.Toplevel):
