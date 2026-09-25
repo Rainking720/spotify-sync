@@ -38,10 +38,18 @@ def db():
     return sqlite3.connect(DB, timeout=15)
 
 
+_schema_checked = False
+
+
 def fetch(statuses):
+    global _schema_checked
     qs = ",".join("?" * len(statuses))
     con = db()
-    extra = ["status", "note", "matched_path"]
+    if not _schema_checked:
+        import sync
+        sync.ensure_downloaded_at(con)      # adds downloaded_at on first use
+        _schema_checked = True
+    extra = ["status", "note", "matched_path", "downloaded_at"]
     rows = con.execute(
         "SELECT " + ",".join(COLS + extra) + " FROM spotify_tracks "
         "WHERE status IN (" + qs + ") ORDER BY artist,title", statuses).fetchall()
@@ -110,7 +118,7 @@ class App(tk.Tk):
         lf = ttk.Frame(left)
         lf.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(
-            lf, columns=("status", "where", "artist", "title", "plays", "last"),
+            lf, columns=("status", "where", "artist", "title", "plays", "last", "dl"),
             show="headings", selectmode="extended")
         self._head_text = {}
         # Short fixed-width columns don't stretch, so Plays and Last played stay
@@ -120,7 +128,8 @@ class App(tk.Tk):
                               ("artist", 130, "Artist", True),
                               ("title", 170, "Title", True),
                               ("plays", 46, "Plays", False),
-                              ("last", 108, "Last played", False)):
+                              ("last", 108, "Last played", False),
+                              ("dl", 108, "Downloaded", False)):
             self._head_text[c] = t
             self.tree.heading(c, text=t, command=lambda c=c: self.sort_by(c))
             self.tree.column(c, width=w, minwidth=40 if not grow else 80,
@@ -322,7 +331,7 @@ class App(tk.Tk):
         self._sel_ids = self._selected_ids()
 
     # Numbers and dates read most usefully biggest/newest first.
-    DESC_FIRST = {"plays", "last"}
+    DESC_FIRST = {"plays", "last", "dl"}
 
     def sort_by(self, col):
         """Header click: sort by that column, or reverse it if already sorted."""
@@ -343,6 +352,8 @@ class App(tk.Tk):
             return t.get("play_count") or 0
         if col == "last":
             return t.get("last_played") or ""
+        if col == "dl":
+            return t.get("downloaded_at") or ""
         if col == "where":
             return where
         return (t.get(col) or "").lower()
@@ -443,7 +454,8 @@ class App(tk.Tk):
             self.tree.insert("", "end", iid=str(i), values=(
                 t["status"], where, t["artist"], t["title"],
                 t.get("play_count") or "",
-                plays.local_time(t.get("last_played"))))
+                plays.local_time(t.get("last_played")),
+                plays.local_time(t.get("downloaded_at"))))
             if t.get("track_id") in keep:
                 restore.append(str(i))
             shown += 1

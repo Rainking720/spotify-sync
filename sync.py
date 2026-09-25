@@ -34,7 +34,56 @@ def connect(db=SYNC_DB):
         first_seen TEXT, updated_at TEXT)""")
     con.execute("CREATE INDEX IF NOT EXISTS ix_status ON spotify_tracks(status)")
     con.commit()
+    ensure_downloaded_at(con)
     return con
+
+
+# When each track was downloaded, kept by triggers so every path that marks a
+# row downloaded (nightly run, Retry, pasted URL, reconcile, Add song) records
+# it without having to remember to. It is stamped when a row becomes
+# 'downloaded', or gets a different YouTube URL while downloaded (a
+# re-download) -- not when its path changes, so Move to library keeps it.
+_STAMP = "strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+TRIGGERS = (
+    "CREATE TRIGGER IF NOT EXISTS stamp_downloaded_upd "
+    "AFTER UPDATE OF status, yt_url ON spotify_tracks "
+    "WHEN NEW.status = 'downloaded' AND (OLD.status IS NOT 'downloaded' "
+    "OR NEW.yt_url IS NOT OLD.yt_url) BEGIN "
+    "UPDATE spotify_tracks SET downloaded_at = " + _STAMP +
+    " WHERE track_id = NEW.track_id; END",
+    "CREATE TRIGGER IF NOT EXISTS stamp_downloaded_ins "
+    "AFTER INSERT ON spotify_tracks "
+    "WHEN NEW.status = 'downloaded' AND NEW.downloaded_at IS NULL BEGIN "
+    "UPDATE spotify_tracks SET downloaded_at = " + _STAMP +
+    " WHERE track_id = NEW.track_id; END",
+)
+
+
+def ensure_downloaded_at(con):
+    """Add the downloaded_at column and its triggers if missing. The first time,
+    rows already downloaded get their file's modified time -- the closest
+    record there is of when it was fetched."""
+    if "downloaded_at" in [r[1] for r in con.execute("PRAGMA table_info(spotify_tracks)")]:
+        return
+    con.execute("BEGIN IMMEDIATE")      # the GUI and the nightly run may race here
+    try:
+        if "downloaded_at" not in [r[1] for r in
+                                   con.execute("PRAGMA table_info(spotify_tracks)")]:
+            con.execute("ALTER TABLE spotify_tracks ADD COLUMN downloaded_at TEXT")
+            for tid, p in con.execute(
+                    "SELECT track_id, matched_path FROM spotify_tracks "
+                    "WHERE status = 'downloaded'").fetchall():
+                if p and os.path.exists(p):
+                    when = datetime.fromtimestamp(os.path.getmtime(p), timezone.utc)
+                    con.execute("UPDATE spotify_tracks SET downloaded_at = ? "
+                                "WHERE track_id = ?",
+                                (when.strftime("%Y-%m-%dT%H:%M:%SZ"), tid))
+        for sql in TRIGGERS:
+            con.execute(sql)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
 
 
 def backup(db=SYNC_DB):

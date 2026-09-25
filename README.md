@@ -230,6 +230,14 @@ manager can put others there.
 A tkinter window for everything still unresolved. Pick a track to see why it
 stalled and the candidates that were stored when it was queued.
 
+The **Downloaded** column shows when this tool fetched each song; click it
+(like any header) to sort newest first. It's `downloaded_at` in `sync.db`, kept
+by two SQLite triggers: stamped when a row becomes `downloaded` by any route
+(nightly run, Retry, pasted URL, reconcile, Add song) or is re-downloaded from
+a different URL, and left alone when **Move to library** changes its path. Rows
+downloaded before the column existed were filled in from their file's modified
+time; one whose file had gone stays blank and sorts last.
+
 The **Show** dropdown picks which rows load (`Unresolved`, `Needs review`,
 `Failed`, `Skipped`, `Downloaded`, `Unsorted`, `Owned`, `Everything`). The
 **Find** box then narrows those as you type, matching artist, title or album.
