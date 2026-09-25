@@ -148,7 +148,7 @@ def local_time(iso):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone().strftime("%Y-%m-%d %H:%M")
-    except ValueError:
+    except (ValueError, OSError, OverflowError):     # OSError: pre-1970 on Windows
         return iso[:16].replace("T", " ")
 
 

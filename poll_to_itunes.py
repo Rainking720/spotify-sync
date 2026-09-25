@@ -40,7 +40,9 @@ def _lock():
 
 def _fmt_date(iso):
     import plays
-    return plays.local_time(iso) if iso else "-"
+    # iTunes' "never played" is a placeholder date in 1899, which Windows
+    # can't convert to local time
+    return plays.local_time(iso) if iso and iso[:4] >= "1971" else "-"
 
 
 def report(res, rows, dry):
@@ -104,23 +106,47 @@ def run(dry=False, snapshot=True):
     waiting = sum(r["spotify_plays"] for r in rows if r["target"] == "none")
     print("{} play(s) to apply, {} waiting for a song to exist".format(
         summary["plays"] - waiting, waiting))
-    if not summary["plays"]:
-        return 0
 
-    if dry:
-        tmp = tempfile.mkdtemp(prefix="poll_dry_")
-        try:
+    tmp = tempfile.mkdtemp(prefix="poll_dry_") if dry else None
+    try:
+        c = None
+        if dry:
             copy = os.path.join(tmp, "sync.db")
             shutil.copy2(isync.SYNC, copy)
             c = sqlite3.connect(copy)
-            res = isync.apply_plan(rows, summary, con=c, dry=True)
+        if summary["plays"]:
+            res = isync.apply_plan(rows, summary, con=c, dry=dry)
+            report(res, rows, dry)
+        history_catch_up(isync, c, dry)
+        if c:
             c.close()
-        finally:
+    finally:
+        if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
-    else:
-        res = isync.apply_plan(rows, summary)
-    report(res, rows, dry)
     return 0
+
+
+def history_catch_up(isync, con, dry):
+    """Streaming-history plays owed to songs that have since reached iTunes.
+
+    The history import is run by hand, once. A song that wasn't in iTunes then
+    has its plays left owed (or held in the database), and without this they
+    only arrived if the import was run again after the song was added. Only
+    iTunes targets are applied here -- nothing is created -- and the import's
+    watermark is never moved.
+    """
+    try:
+        hrows, hsum = isync.build_plan("history", con=con)
+    except Exception as e:
+        print("history catch-up skipped: {}".format(e))
+        return
+    hrows = [r for r in hrows if r["target"] == isync.TO_ITUNES]
+    if not hrows:
+        return
+    print("\nhistory plays owed to {} song(s) now in iTunes".format(len(hrows)))
+    time.sleep(1.1)                    # a run id of its own (they're per second)
+    res = isync.apply_plan(hrows, dict(hsum, watermark=""), con=con, dry=dry)
+    report(res, hrows, dry)
 
 
 def main():

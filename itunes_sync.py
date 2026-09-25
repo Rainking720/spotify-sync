@@ -253,6 +253,11 @@ def ensure_schema(con):
         # which iTunes track / database row got the play, so an undo that can't
         # restore one track releases only the plays it really took back
         con.execute("ALTER TABLE poller_applied ADD COLUMN ref TEXT")
+    # A poller play's record before a run moved it from the database to iTunes,
+    # so undoing that run returns it to the database instead of forgetting it.
+    con.execute("""CREATE TABLE IF NOT EXISTS poller_applied_undo(
+        run_id TEXT, play_key TEXT, prev_run_id TEXT, prev_applied_at TEXT,
+        prev_target TEXT, prev_ref TEXT)""")
     # Previous database values, so undo covers database rows as well as iTunes.
     con.execute("""CREATE TABLE IF NOT EXISTS syncdb_undo(
         run_id TEXT, track_id TEXT, prev_plays INTEGER, prev_last TEXT,
@@ -286,7 +291,12 @@ def _source_tracks(source, con, min_ms=history.MIN_MS):
         return agg["tracks"], agg
     # poller: only plays after the export's reach, or everything if no import yet
     mark = get_meta(con, WATERMARK_KEY, "")
-    applied = {k for (k,) in con.execute("SELECT play_key FROM poller_applied")}
+    done = con.execute("SELECT play_key, target FROM poller_applied").fetchall()
+    # Plays held in the database because the song wasn't in iTunes yet. Like the
+    # history import's, they still owe iTunes, so build_plan moves them there
+    # once the song arrives.
+    staged = {k for k, tg in done if tg == TO_SYNCDB}
+    applied = {k for k, tg in done} - staged
     data = plays_mod.load()
     tracks, counted = {}, 0
     raw = _poller_rows(data, mark, applied)
@@ -294,7 +304,13 @@ def _source_tracks(source, con, min_ms=history.MIN_MS):
         key = (norm_artist(artist.split(",")[0]), norm_title(name))
         t = tracks.setdefault(key, {"artist": artist, "name": name, "album": "",
                                     "track_id": tid, "count": 0, "last": "",
-                                    "play_keys": []})
+                                    "play_keys": [], "staged": 0,
+                                    "staged_keys": [], "staged_last": ""})
+        if pkey in staged:
+            t["staged"] += 1
+            t["staged_keys"].append(pkey)
+            t["staged_last"] = max(t["staged_last"], ts)
+            continue
         t["count"] += 1
         t["play_keys"].append(pkey)
         counted += 1
@@ -302,7 +318,7 @@ def _source_tracks(source, con, min_ms=history.MIN_MS):
             t["last"] = ts
     return tracks, {"tracks": tracks, "plays": counted, "watermark": mark,
                     "entries": counted, "skipped": 0,
-                    "already_applied_plays": len(applied)}
+                    "already_applied_plays": len(done)}
 
 
 def play_key(rec):
@@ -371,6 +387,14 @@ def build_plan(source="history", min_ms=history.MIN_MS, con=None):
         prev_n, prev_last, prev_dest = credited.get(key, (0, "", ""))
         cands = lib.get(key)
         srow = sync_rows.get(key)
+        if source == "poller":
+            if cands and src.get("staged"):
+                # held in the database until now; the song is in iTunes at last
+                src = dict(src, count=src["count"] + src["staged"],
+                           play_keys=src["play_keys"] + src["staged_keys"],
+                           last=max(src["last"], src["staged_last"]))
+            if not src["count"]:
+                continue          # only plays already held in the database
         target_now = TO_ITUNES if cands else (TO_SYNCDB if srow else NO_TARGET)
 
         # Plays credited only to the database still owe iTunes. Recording them in
@@ -424,7 +448,10 @@ def build_plan(source="history", min_ms=history.MIN_MS, con=None):
     rows.sort(key=lambda r: (-r["spotify_plays"], r["artist"].lower()))
     summary = {
         "source": source,
-        "plays": agg.get("plays", 0),
+        # for the poller, every play in the plan -- including ones held in the
+        # database that are moving to iTunes now
+        "plays": (sum(r["spotify_plays"] for r in rows) if source == "poller"
+                  else agg.get("plays", 0)),
         "entries": agg.get("entries", 0),
         "skipped": agg.get("skipped", 0),
         "watermark": agg.get("watermark", ""),
@@ -606,10 +633,14 @@ def _apply(rows, summary, con, progress, write_itunes, create_missing, dry):
             if not keys:
                 return None
             q = ",".join("?" * len(keys))
-            taken = {k for (k,) in con.execute(
-                "SELECT play_key FROM poller_applied WHERE play_key IN (" + q + ")",
-                keys)}
-            r["play_keys"] = [k for k in keys if k not in taken]
+            held = dict(con.execute(
+                "SELECT play_key, target FROM poller_applied WHERE play_key IN ("
+                + q + ")", keys).fetchall())
+            # A play held in the database is still owed to iTunes; any other
+            # recorded play is done.
+            r["_staged"] = {k for k, tg in held.items()
+                            if tg == TO_SYNCDB and r["target"] == TO_ITUNES}
+            r["play_keys"] = [k for k in keys if k not in held or k in r["_staged"]]
             return len(r["play_keys"]) or None
         if source == "history":
             na, nt = r["key"]
@@ -628,6 +659,17 @@ def _apply(rows, summary, con, progress, write_itunes, create_missing, dry):
     def record(r, ref):
         if source == "poller":
             for k in r["play_keys"]:
+                if k in r.get("_staged", ()):
+                    # moving from the database to iTunes: keep the old record
+                    # so undo can put it back rather than drop it
+                    prev = con.execute("SELECT run_id, applied_at, target, ref FROM "
+                                       "poller_applied WHERE play_key=?", (k,)).fetchone()
+                    con.execute("INSERT INTO poller_applied_undo VALUES(?,?,?,?,?,?)",
+                                (run_id, k) + tuple(prev))
+                    con.execute("UPDATE poller_applied SET run_id=?, applied_at=?, "
+                                "target=?, ref=? WHERE play_key=?",
+                                (run_id, now, r["target"], ref, k))
+                    continue
                 con.execute("INSERT OR IGNORE INTO poller_applied VALUES(?,?,?,?,?)",
                             (k, run_id, now, r["target"], ref))
         elif source == "history":
@@ -684,8 +726,7 @@ def _apply(rows, summary, con, progress, write_itunes, create_missing, dry):
                 # iTunes refused: take the record back so the plays stay owed.
                 con.execute("DELETE FROM itunes_undo WHERE run_id=? AND pid=?",
                             (run_id, r["pid"]))
-                con.execute("DELETE FROM poller_applied WHERE run_id=? AND ref=?",
-                            (run_id, r["pid"]))
+                _release_poller(con, run_id, r["pid"])
                 if source == "history":
                     _uncredit(con, run_id, [r["key"]])
                 con.commit()
@@ -793,6 +834,26 @@ def _apply(rows, summary, con, progress, write_itunes, create_missing, dry):
     return done
 
 
+def _release_poller(con, run_id, ref):
+    """Take back the poller plays run_id gave to ref: a play it moved from the
+    database returns to the database; one it recorded fresh is owed again."""
+    n = 0
+    for (k,) in con.execute("SELECT play_key FROM poller_applied WHERE run_id=? "
+                            "AND ref IS ?", (run_id, ref)).fetchall():
+        prev = con.execute("SELECT prev_run_id, prev_applied_at, prev_target, "
+                           "prev_ref FROM poller_applied_undo WHERE run_id=? AND "
+                           "play_key=?", (run_id, k)).fetchone()
+        if prev:
+            con.execute("UPDATE poller_applied SET run_id=?, applied_at=?, "
+                        "target=?, ref=? WHERE play_key=?", tuple(prev) + (k,))
+            con.execute("DELETE FROM poller_applied_undo WHERE run_id=? AND "
+                        "play_key=?", (run_id, k))
+        else:
+            con.execute("DELETE FROM poller_applied WHERE play_key=?", (k,))
+        n += 1
+    return n
+
+
 def _uncredit(con, run_id, keys):
     """Put history ledger entries for these songs back to before run_id."""
     for na, nt in keys:
@@ -890,8 +951,7 @@ def _undo(run_id, con):
                               "run_id=?", (run_id,)).fetchall():
         if ref in failed_pids:
             continue
-        released += con.execute("DELETE FROM poller_applied WHERE run_id=? AND "
-                                "ref IS ?", (run_id, ref)).rowcount
+        released += _release_poller(con, run_id, ref)
     out["plays_released"] = released
 
     prev_mark = get_meta(con, "watermark_before_" + run_id)

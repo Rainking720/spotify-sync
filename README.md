@@ -675,5 +675,15 @@ that poll just logged. Same shape as the poller task: runs as you while logged o
 catches up missed runs, never overlaps itself. Output goes to
 `logs\poll_itunes.log`; each run re-reads iTunes first (~3-4 minutes).
 
+**Songs added to iTunes later.** A play for a song not in iTunes yet is held in
+`sync.db` (target `syncdb` in `poller_applied`). Once the song is in iTunes, the
+next run moves those held plays there -- once: the record is switched to
+`itunes`, and the previous one kept in `poller_applied_undo` so undoing the run
+puts the play back in the database rather than losing it. Each run then does
+the same for streaming-history plays: any the import owed to a song that has
+since reached iTunes (left owed, or held in the database) are applied as a
+second run of their own. That catch-up only ever writes to iTunes and never
+moves the import's watermark.
+
     Get-ScheduledTaskInfo -TaskName 'Spotify Plays to iTunes'
     Disable-ScheduledTask -TaskName 'Spotify Plays to iTunes'   # pause
