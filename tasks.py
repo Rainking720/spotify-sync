@@ -170,6 +170,14 @@ def register(task, task_name=None):
     return p.returncode == 0, msg
 
 
+def run_now(task):
+    """Start a registered task now, exactly as its schedule would (same
+    account, no window). Returns (ok, message)."""
+    rc, out, err = _ps("Start-ScheduledTask -TaskName '" +
+                       task["name"].replace("'", "''") + "'")
+    return rc == 0, (err or out)
+
+
 if __name__ == "__main__":
     import sys
     try:

@@ -1348,6 +1348,9 @@ class SettingsDialog(tk.Toplevel):
     # ------------------------------------------------------------ tasks
     def load_tasks(self):
         import tasks
+        self._task_poll = None
+        if not self.winfo_exists():       # a queued refresh after the dialog closed
+            return
         self.b_tasks.configure(state="disabled")
         self.task_note.configure(text="checking Task Scheduler...")
         post = self.app.post
@@ -1386,14 +1389,71 @@ class SettingsDialog(tk.Toplevel):
                            foreground=self.COLOURS[r["level"]], wraplength=560)
             st.grid(row=i * 2 - 1, column=1, rowspan=2, sticky="w", pady=(6, 0))
             self.task_rows += [name, what, st]
+            btns = ttk.Frame(self.tasks_frame)
+            btns.grid(row=i * 2 - 1, column=2, rowspan=2, sticky="e", pady=(6, 0))
+            self.task_rows.append(btns)
             # a button only when there's something known to fix: missing, or
             # registered with a different command from what its script makes now
             if r["script_found"] and (not r["registered"] or r["current"] is False):
-                b = ttk.Button(self.tasks_frame,
-                               text="Register" if not r["registered"] else "Re-register",
-                               command=lambda row=r: self.register_task(row))
-                b.grid(row=i * 2 - 1, column=2, rowspan=2, sticky="e", pady=(6, 0))
-                self.task_rows.append(b)
+                ttk.Button(btns,
+                           text="Register" if not r["registered"] else "Re-register",
+                           command=lambda row=r: self.register_task(row)).pack(
+                               side="left", padx=(0, 6))
+            if r["registered"]:
+                running = (r.get("info") or {}).get("state") == "Running"
+                ttk.Button(btns, text="Running..." if running else "Run now",
+                           state="disabled" if running else "normal",
+                           command=lambda row=r: self.run_task(row)).pack(side="left")
+        # While anything runs, keep the status current so its result shows up
+        # without pressing Refresh.
+        if any((r.get("info") or {}).get("state") == "Running" for r in rows) \
+                and not getattr(self, "_task_poll", None):
+            self._task_poll = self.after(5000, self.load_tasks)
+
+    def destroy(self):
+        if getattr(self, "_task_poll", None):
+            self.after_cancel(self._task_poll)
+            self._task_poll = None
+        super().destroy()
+
+    # What each task does when started by hand, for the confirmation.
+    RUN_NOTES = {
+        "Spotify Liked Sync": "It checks your Liked Songs and downloads any new "
+                              "ones, which can take a while.",
+        "Spotify Plays to iTunes": "It re-reads your iTunes library (a few "
+                                   "minutes) and adds any new Spotify plays.",
+        "SpotifyPlayTracker": "It asks Spotify for your recent plays and logs "
+                              "any new ones.",
+    }
+
+    def run_task(self, row):
+        import tasks
+        if not messagebox.askyesno("Run task now", (
+                "Run \"{}\" now?\n\n{}\n\nIt runs in the background exactly as "
+                "scheduled; its status here updates when it finishes.").format(
+                    row["name"], self.RUN_NOTES.get(row["name"], "")),
+                parent=self):
+            return
+        post = self.app.post
+
+        def work():
+            try:
+                ok, msg = tasks.run_now(row)
+            except Exception as e:
+                ok, msg = False, str(e)
+            post(self._task_started, row, ok, msg)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _task_started(self, row, ok, msg):
+        if not self.winfo_exists():
+            return
+        self.app.log(("started " if ok else "couldn't start ") + row["name"] +
+                     (": " + msg if msg and not ok else ""))
+        if not ok:
+            messagebox.showerror("Couldn't start", msg or "unknown error", parent=self)
+        if not getattr(self, "_task_poll", None):
+            self._task_poll = self.after(1500, self.load_tasks)
 
     def register_task(self, row):
         import tasks
