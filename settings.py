@@ -33,7 +33,9 @@ DEFAULTS = {
     "itunes_playlist": ("NewFromSpotify",
                         "playlist that 'Move to library' adds songs to"),
     "contact_email": ("", "sent to MusicBrainz with lookups made by yt2mp3.ps1"),
+    "parallel_downloads": ("20", "album tracks downloaded at once (1 = one at a time)"),
 }
+MAX_PARALLEL = 20
 # keys holding a file or folder path
 PATH_KEYS = {"library_root", "staging_root", "temp_root", "plays_path",
              "history_dir", "ytdlp_path", "ffmpeg_path"}
@@ -105,6 +107,16 @@ def ffmpeg():
     return tool("ffmpeg.exe", "ffmpeg_path")
 
 
+def parallel_downloads():
+    """How many album downloads run at once, clamped to 1..MAX_PARALLEL. A value
+    that isn't a number falls back to the default rather than failing a run."""
+    try:
+        n = int(get("parallel_downloads"))
+    except ValueError:
+        n = int(DEFAULTS["parallel_downloads"][0])
+    return max(1, min(n, MAX_PARALLEL))
+
+
 # Settings a missing path breaks outright, versus ones that are optional or get
 # created on first use.
 REQUIRED = {"library_root"}
@@ -129,6 +141,17 @@ def validate(key, value):
         if v and "@" not in v:
             return "warn", "doesn't look like an email address"
         return ("warn", "blank - MusicBrainz asks for a contact") if not v else ("ok", "")
+    if key == "parallel_downloads":
+        try:
+            n = int(v)
+        except ValueError:
+            return "error", "must be a whole number"
+        if n < 1:
+            return "error", "must be at least 1"
+        if n > MAX_PARALLEL:
+            return "warn", "capped at {} - more than that is used as {}".format(
+                MAX_PARALLEL, MAX_PARALLEL)
+        return "ok", ""
     if key in ("ytdlp_path", "ffmpeg_path") and not v:
         found = tool("yt-dlp.exe" if key == "ytdlp_path" else "ffmpeg.exe", key)
         return ("ok", "found automatically: " + found) if found else \

@@ -73,6 +73,7 @@ and whether it came from `config.json` or the default.
 | `ffmpeg_path` | blank = `tools\`, repo folder, its parent, PATH | ffmpeg.exe |
 | `itunes_playlist` | `NewFromSpotify` | playlist **Move to library** adds to |
 | `contact_email` | blank | sent to MusicBrainz with `yt2mp3.ps1` lookups; it asks for one |
+| `parallel_downloads` | `20` | album tracks **Download selected** fetches at once; 1 = one at a time, capped at 20 |
 
 The downloader passes `staging_root`, `temp_root` and the tool paths to
 `yt2mp3.ps1` explicitly, so downloads always land where **Move to library** and
@@ -291,8 +292,17 @@ Nothing expands albums automatically. In the GUI, pick any track, click
 
 Only `new` tracks are preselected. Ctrl-click to adjust, then **Download
 selected**; you get a confirmation with the count, and an explicit warning if the
-selection includes anything you already have. **Stop** halts after the current
-track, and everything commits per track so a stopped run is resumable.
+selection includes anything you already have. **Stop** lets the tracks already
+downloading finish and starts no more, and everything commits per track so a
+stopped run is resumable.
+
+Up to `parallel_downloads` tracks (default 20) search and download at once, and
+each row's **State** shows where it is: waiting, searching, downloading, then
+downloaded / needs review / failed. Each run of `yt2mp3.ps1` gets its own temp
+folder, so parallel runs can't collide. The pool threads only search and
+download; one thread writes every result to `sync.db`, as the sequential version
+did. If YouTube starts refusing requests (HTTP 429, "confirm you're not a bot"),
+lower the setting -- failed tracks can be retried from the review queue.
 
 Album tracks are stored with `source='album'`, never `'liked'`. This matters: the
 incremental Liked Songs fetch stops at the first page of already-known ids, so an

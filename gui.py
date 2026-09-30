@@ -1042,7 +1042,7 @@ class AlbumDialog(tk.Toplevel):
 
     def request_stop(self):
         self.stop = True
-        self.status.configure(text="stopping after this track...")
+        self.status.configure(text="stopping - tracks already downloading will finish...")
 
     # ---------- downloading ----------
     def download(self):
@@ -1064,68 +1064,113 @@ class AlbumDialog(tk.Toplevel):
         self.b_go.configure(state="disabled")
         self.b_stop.configure(state="normal")
         self.b_close.configure(state="disabled")
+        iids = list(self.tree.selection())
+        workers = min(settings.parallel_downloads(), len(sel))
+
+        def fetch_one(iid, t):
+            """Search and download one track. Runs on a pool thread, so it touches
+            neither widgets nor the database -- it only reports back."""
+            import download, ytpick
+            if self.stop:
+                return iid, t, "stopped", None
+            try:
+                self.app.post(self._row, iid, "searching")
+                best, cands, reason = ytpick.pick(t["artist"], t["title"],
+                                                  t["duration_ms"])
+                if not best:
+                    return iid, t, "review", (reason, cands)
+                if self.stop:
+                    return iid, t, "stopped", None
+                self.app.post(self._row, iid, "downloading")
+                good, final, msg = download.invoke(t, best["url"])
+                return iid, t, "ok" if good else "failed", (best["url"], final, msg)
+            except Exception as e:
+                return iid, t, "error", str(e)
 
         def work():
-            import albums, download, ytpick
+            import albums
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             con = db()
             albums.queue(con, sel)          # track them before fetching anything
-            ok = fail = review = 0
-            for n, t in enumerate(sel, 1):
-                if self.stop:
-                    self.app.post(self._progress,
-                                  "stopped at {}/{}".format(n - 1, len(sel)))
-                    break
-                self.app.post(self._progress, "{}/{}  {}".format(n, len(sel), t["title"]))
-                try:
-                    best, cands, reason = ytpick.pick(
-                        t["artist"], t["title"], t["duration_ms"])
-                    if not best:
+            ok = fail = review = stopped = 0
+            # Downloads run in parallel; results are written here, one at a time on
+            # this thread's own connection, committing per track as before, so an
+            # interrupted run still resumes cleanly.
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = [pool.submit(fetch_one, iid, t) for iid, t in zip(iids, sel)]
+                for n, fut in enumerate(as_completed(futs), 1):
+                    iid, t, kind, data = fut.result()
+                    if kind == "error":
+                        fail += 1
+                        self.app.post(self._row, iid, "error", data)
+                        self.app.post(self.app.log, "ERROR: " + t["title"] + " - " + data)
+                    elif kind == "stopped":
+                        stopped += 1
+                        self.app.post(self._row, iid, "not started")
+                    elif kind == "review":
+                        reason, cands = data
                         con.execute("UPDATE spotify_tracks SET status='needs_review',"
                                     "note=?,updated_at=datetime('now') WHERE track_id=?",
                                     (json.dumps({"reason": reason, "candidates": [
                                         {"url": c["url"], "title": c["title"],
                                          "dur": c["duration"], "score": c.get("score")}
                                         for c in cands[:5]]}), t["track_id"]))
-                        con.commit()
                         review += 1
-                        continue
-                    good, final, msg2 = download.invoke(t, best["url"])
-                    if good:
+                        self.app.post(self._row, iid, "needs review")
+                    elif kind == "ok":
+                        url, final, _msg = data
                         con.execute("UPDATE spotify_tracks SET status='downloaded',"
                                     "yt_url=?,matched_path=?,updated_at=datetime('now') "
-                                    "WHERE track_id=?", (best["url"], final, t["track_id"]))
+                                    "WHERE track_id=?", (url, final, t["track_id"]))
                         ok += 1
+                        self.app.post(self._row, iid, "downloaded")
                         self.app.post(self.app.log, "OK: " + os.path.basename(final))
                     else:
+                        _url, _final, msg = data
                         con.execute("UPDATE spotify_tracks SET status='failed',note=?,"
                                     "updated_at=datetime('now') WHERE track_id=?",
-                                    (msg2, t["track_id"]))
+                                    (msg, t["track_id"]))
                         fail += 1
-                        self.app.post(self.app.log, "FAILED: " + t["title"] + " - " + str(msg2))
+                        self.app.post(self._row, iid, "failed", str(msg))
+                        self.app.post(self.app.log, "FAILED: " + t["title"] + " - " + str(msg))
                     con.commit()
-                except Exception as e:
-                    fail += 1
-                    self.app.post(self.app.log, "ERROR: " + t["title"] + " - " + str(e))
+                    self.app.post(self._progress, "{}/{} finished  ({} at a time)".format(
+                        n, len(sel), workers))
             con.close()
-            self.app.post(self._done, ok, review, fail)
+            self.app.post(self._done, ok, review, fail, stopped)
 
+        for iid in iids:
+            self._row(iid, "waiting")
+        self.status.configure(text="0/{} finished  ({} at a time)".format(len(sel), workers))
         threading.Thread(target=work, daemon=True).start()
 
     def _progress(self, text):
-        self.status.configure(text=text)
+        if self.winfo_exists():
+            self.status.configure(text=text)
 
-    def _done(self, ok, review, fail):
+    def _row(self, iid, state, detail=None):
+        """Show one track's progress in its State column while the batch runs."""
+        if not self.winfo_exists() or not self.tree.exists(iid):
+            return
+        self.tree.set(iid, "state", state)
+        if detail is not None:
+            self.tree.set(iid, "detail", detail)
+
+    def _done(self, ok, review, fail, stopped=0):
+        text = "{} downloaded, {} need review, {} failed".format(ok, review, fail)
+        if stopped:
+            text += ", {} not started (stopped)".format(stopped)
+        self.app.log("album: " + text)
+        self.app._lib = None          # new files on disk; rebuild the cache lazily
+        self.app.reload()
+        if not self.winfo_exists():
+            return
         self.busy = False
         self.b_go.configure(state="normal")
         self.b_stop.configure(state="disabled")
         self.b_close.configure(state="normal")
-        self.status.configure(text="done: {} downloaded, {} need review, {} failed"
-                              .format(ok, review, fail))
-        self.app.log("album: {} downloaded, {} need review, {} failed"
-                     .format(ok, review, fail))
-        self.app._lib = None          # new files on disk; rebuild the cache lazily
+        self.status.configure(text="done: " + text)
         self.load()
-        self.app.reload()
 
 
 class LinkDialog(tk.Toplevel):
@@ -1273,6 +1318,7 @@ class SettingsDialog(tk.Toplevel):
         ("ffmpeg_path", "ffmpeg.exe", "file", [("ffmpeg", "ffmpeg*.exe"), ("Programs", "*.exe")]),
         ("itunes_playlist", "iTunes playlist", None, None),
         ("contact_email", "Contact email", None, None),
+        ("parallel_downloads", "Parallel album downloads", None, None),
     ]
     COLOURS = {"ok": "#2a7a2a", "warn": "#a86a00", "error": "#aa3333"}
     # key: (display name, approximate download size, source shown to the user)
