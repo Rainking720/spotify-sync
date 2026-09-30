@@ -27,6 +27,11 @@ def connect(db=DB):
         artist TEXT, title TEXT, album TEXT,
         n_artist TEXT, n_title TEXT)""")
     con.execute("CREATE INDEX IF NOT EXISTS ix_key ON tracks(n_artist, n_title)")
+    # Files without a usable artist+title. Never matched, but remembered so a warm
+    # scan skips them like any unchanged file -- otherwise all ~460 were opened and
+    # re-read on every run.
+    con.execute("""CREATE TABLE IF NOT EXISTS untagged(
+        path TEXT PRIMARY KEY, mtime REAL, size INTEGER)""")
     con.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
     con.commit()
     rekey(con)
@@ -72,6 +77,32 @@ def read_tags(path):
     return artist, title, album
 
 
+def scan(root):
+    """Yield (path, mtime, size) for every .mp3 under root.
+
+    os.scandir rather than os.walk + os.stat: on Windows each entry's size and
+    mtime arrive with the directory listing, so a warm scan of a network share
+    costs a round trip per folder instead of one per file. Like os.walk, it
+    doesn't descend into symlinked folders.
+    """
+    stack = [root]
+    while stack:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(e.path)
+                    elif e.name.lower().endswith(".mp3"):
+                        st = e.stat()
+                        yield os.path.normpath(e.path), st.st_mtime, st.st_size
+                except OSError:
+                    continue
+
+
 def refresh(root=None, db=DB, verbose=True):
     # Config may say 'D:/Mp3' while stored paths use backslashes; without
     # this every path looks both new and deleted and the scan never goes warm.
@@ -79,54 +110,60 @@ def refresh(root=None, db=DB, verbose=True):
     con = connect(db)
     known = {p: (m, s) for p, m, s in
              con.execute("SELECT path, mtime, size FROM tracks")}
+    known_untagged = {p: (m, s) for p, m, s in
+                      con.execute("SELECT path, mtime, size FROM untagged")}
+
+    def same(prev, mtime, size):
+        return prev and abs(prev[0] - mtime) < 1e-6 and prev[1] == size
 
     t0 = time.time()
-    seen, added, updated, unchanged, skipped = set(), 0, 0, 0, 0
-    rows = []
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for fn in filenames:
-            if not fn.lower().endswith(".mp3"):
-                continue
-            p = os.path.normpath(os.path.join(dirpath, fn))
-            seen.add(p)
-            try:
-                st = os.stat(p)
-            except OSError:
-                continue
-            prev = known.get(p)
-            if prev and abs(prev[0] - st.st_mtime) < 1e-6 and prev[1] == st.st_size:
-                unchanged += 1
-                continue
-            tags = read_tags(p)
-            if tags is None:
-                skipped += 1
-                continue
+    seen, added, updated, unchanged = set(), 0, 0, 0
+    rows, untagged = [], []
+    for p, mtime, size in scan(root):
+        seen.add(p)
+        prev = known.get(p)
+        if same(prev, mtime, size) or same(known_untagged.get(p), mtime, size):
+            unchanged += 1
+            continue
+        tags = read_tags(p)
+        na = nt = None
+        if tags:
             artist, title, album = tags
             na, nt = norm_artist(artist), norm_title(title)
-            if not na or not nt:
-                skipped += 1
-                continue
-            rows.append((p, st.st_mtime, st.st_size, artist, title, album, na, nt))
-            if prev:
-                updated += 1
-            else:
-                added += 1
+        if not na or not nt:
+            untagged.append((p, mtime, size))
+            continue
+        rows.append((p, mtime, size, artist, title, album, na, nt))
+        if prev:
+            updated += 1
+        else:
+            added += 1
 
+    # A file that gained tags leaves the untagged list; one that lost them leaves
+    # the index. Each path lives in exactly one of the two tables.
     if rows:
         con.executemany("INSERT OR REPLACE INTO tracks VALUES(?,?,?,?,?,?,?,?)", rows)
+        con.executemany("DELETE FROM untagged WHERE path=?", [(r[0],) for r in rows])
+    if untagged:
+        con.executemany("INSERT OR REPLACE INTO untagged VALUES(?,?,?)", untagged)
+        con.executemany("DELETE FROM tracks WHERE path=?", [(u[0],) for u in untagged])
     gone = [p for p in known if p not in seen]
     if gone:
         con.executemany("DELETE FROM tracks WHERE path=?", [(p,) for p in gone])
+    gone_untagged = [(p,) for p in known_untagged if p not in seen]
+    if gone_untagged:
+        con.executemany("DELETE FROM untagged WHERE path=?", gone_untagged)
     con.commit()
 
     total = con.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
     distinct = con.execute(
         "SELECT COUNT(*) FROM (SELECT 1 FROM tracks GROUP BY n_artist, n_title)"
     ).fetchone()[0]
+    n_untagged = con.execute("SELECT COUNT(*) FROM untagged").fetchone()[0]
     if verbose:
         print(f"index: {total} tracks / {distinct} distinct songs "
               f"(+{added} new, ~{updated} changed, ={unchanged} unchanged, "
-              f"-{len(gone)} removed, {skipped} untagged) in {time.time()-t0:.1f}s")
+              f"-{len(gone)} removed, {n_untagged} untagged) in {time.time()-t0:.1f}s")
     con.close()
     return total, distinct
 

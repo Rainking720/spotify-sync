@@ -184,6 +184,9 @@ def main():
                     help="max tracks to download this run")
     ap.add_argument("--pick-only", action="store_true",
                     help="with --download, choose videos but don't download")
+    ap.add_argument("--parallel", type=int, default=None, metavar="N",
+                    help="with --download, fetch N tracks at once "
+                         "(default: the sync_parallel_downloads setting)")
     args = ap.parse_args()
 
     import spotify  # imported here so --help works without credentials
@@ -235,8 +238,8 @@ def main():
         print("")
         print(f"downloading (limit={args.limit or 'none'})"
               f"{' [pick-only]' if args.pick_only else ''}...")
-        st = download.run(con, limit=args.limit,
-                          dry=args.pick_only)
+        st = download.run(con, limit=args.limit, dry=args.pick_only,
+                          workers=args.parallel)
         print("")
         print("=" * 58)
         print(f"  downloaded   : {st['downloaded']}")

@@ -34,8 +34,11 @@ DEFAULTS = {
                         "playlist that 'Move to library' adds songs to"),
     "contact_email": ("", "sent to MusicBrainz with lookups made by yt2mp3.ps1"),
     "parallel_downloads": ("20", "album tracks downloaded at once (1 = one at a time)"),
+    "sync_parallel_downloads": ("5", "tracks the nightly sync downloads at once "
+                                     "(1 = one at a time)"),
 }
 MAX_PARALLEL = 20
+PARALLEL_KEYS = {"parallel_downloads", "sync_parallel_downloads"}
 # keys holding a file or folder path
 PATH_KEYS = {"library_root", "staging_root", "temp_root", "plays_path",
              "history_dir", "ytdlp_path", "ffmpeg_path"}
@@ -107,13 +110,14 @@ def ffmpeg():
     return tool("ffmpeg.exe", "ffmpeg_path")
 
 
-def parallel_downloads():
-    """How many album downloads run at once, clamped to 1..MAX_PARALLEL. A value
-    that isn't a number falls back to the default rather than failing a run."""
+def parallel(key="parallel_downloads"):
+    """How many downloads run at once, clamped to 1..MAX_PARALLEL. A value that
+    isn't a number falls back to the default rather than failing a run -- the
+    nightly one especially, which nobody is watching."""
     try:
-        n = int(get("parallel_downloads"))
+        n = int(get(key))
     except ValueError:
-        n = int(DEFAULTS["parallel_downloads"][0])
+        n = int(DEFAULTS[key][0])
     return max(1, min(n, MAX_PARALLEL))
 
 
@@ -141,7 +145,7 @@ def validate(key, value):
         if v and "@" not in v:
             return "warn", "doesn't look like an email address"
         return ("warn", "blank - MusicBrainz asks for a contact") if not v else ("ok", "")
-    if key == "parallel_downloads":
+    if key in PARALLEL_KEYS:
         try:
             n = int(v)
         except ValueError:

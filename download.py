@@ -86,7 +86,49 @@ def invoke(track, url, ps1=PS1, music_root=None, timeout=600):
     return True, final, "ok"
 
 
-def run(con, limit=None, music_root=None, dry=False, verbose=True):
+def review_note(reason, cands):
+    """The note stored on a needs_review row: why, plus the top candidates."""
+    return json.dumps({"reason": reason,
+                       "candidates": [{"url": c["url"], "title": c["title"],
+                                       "dur": c["duration"], "score": c.get("score")}
+                                      for c in cands[:5]]})
+
+
+def fetch(track, stopped=lambda: False, on_state=None, music_root=None, dry=False):
+    """Pick a video for one track and download it. Touches no database, so it is
+    safe to run on several threads at once -- yt2mp3.ps1 gives every run its own
+    temp folder. Returns (kind, data):
+
+        ("stopped", None)                  stopped() was true before it started
+        ("review",  (reason, candidates))  nothing confident enough
+        ("picked",  best)                  dry run: chosen, not downloaded
+        ("ok" | "failed", (best, final_path, message))
+    """
+    if stopped():
+        return "stopped", None
+    if on_state:
+        on_state("searching")
+    best, cands, reason = ytpick.pick(track["artist"], track["title"],
+                                      track["duration_ms"])
+    if not best:
+        return "review", (reason, cands)
+    if dry:
+        return "picked", best
+    if stopped():
+        return "stopped", None
+    if on_state:
+        on_state("downloading")
+    ok, final, msg = invoke(track, best["url"], music_root=music_root)
+    return ("ok" if ok else "failed"), (best, final, msg)
+
+
+def run(con, limit=None, music_root=None, dry=False, verbose=True, workers=None):
+    """Download every pending track, up to `workers` at once (default: the
+    sync_parallel_downloads setting). Results are written on this thread only,
+    committing per track, so an interrupted run stays resumable."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+    import settings
     rows = con.execute("""SELECT track_id, artist, title, album, duration_ms,
                                  track_number, year, cover_url
                           FROM spotify_tracks WHERE status='pending'
@@ -97,48 +139,60 @@ def run(con, limit=None, music_root=None, dry=False, verbose=True):
     if limit:
         tracks = tracks[:limit]
     stats = {"downloaded": 0, "needs_review": 0, "failed": 0}
+    if not tracks:
+        return stats
+    workers = workers or settings.parallel("sync_parallel_downloads")
+    workers = max(1, min(workers, settings.MAX_PARALLEL, len(tracks)))
+    if verbose:
+        print(f"{len(tracks)} track(s), {workers} at a time")
 
-    for i, t in enumerate(tracks, 1):
-        label = f"{t['artist']} - {t['title']}"
-        if verbose:
-            print(f"\n[{i}/{len(tracks)}] {label}")
-        best, cands, reason = ytpick.pick(t["artist"], t["title"], t["duration_ms"])
-
-        if not best:
-            note = json.dumps({"reason": reason,
-                               "candidates": [{"url": c["url"], "title": c["title"],
-                                               "dur": c["duration"],
-                                               "score": c.get("score")}
-                                              for c in cands[:5]]})
-            con.execute("""UPDATE spotify_tracks SET status='needs_review', note=?,
-                           updated_at=? WHERE track_id=?""", (note, _now(), t["track_id"]))
-            con.commit()
-            stats["needs_review"] += 1
+    stop = threading.Event()
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futs = {pool.submit(fetch, t, stop.is_set, None, music_root, dry): t
+                for t in tracks}
+        for i, fut in enumerate(as_completed(futs), 1):
+            t = futs[fut]
+            kind, data = fut.result()   # an unexpected error ends the run, as before
             if verbose:
-                print(f"    REVIEW: {reason}")
-            continue
-
-        if verbose:
-            print(f"    -> [{best['score']}] {best['duration']}s "
-                  f"{best['channel']} | {best['title'][:50]}")
-        if dry:
-            continue
-
-        ok, final, msg = invoke(t, best["url"], music_root=music_root)
-        if ok:
-            con.execute("""UPDATE spotify_tracks SET status='downloaded', yt_url=?,
-                           matched_path=?, note=NULL, updated_at=?
-                           WHERE track_id=?""",
-                        (best["url"], final, _now(), t["track_id"]))
-            stats["downloaded"] += 1
+                print(f"\n[{i}/{len(tracks)}] {t['artist']} - {t['title']}")
+            if kind == "review":
+                reason, cands = data
+                con.execute("""UPDATE spotify_tracks SET status='needs_review', note=?,
+                               updated_at=? WHERE track_id=?""",
+                            (review_note(reason, cands), _now(), t["track_id"]))
+                con.commit()
+                stats["needs_review"] += 1
+                if verbose:
+                    print(f"    REVIEW: {reason}")
+                continue
+            best = data if kind == "picked" else data[0]
             if verbose:
-                print(f"    OK: {os.path.basename(final)}")
-        else:
-            con.execute("""UPDATE spotify_tracks SET status='failed', yt_url=?,
-                           note=?, updated_at=? WHERE track_id=?""",
-                        (best["url"], msg, _now(), t["track_id"]))
-            stats["failed"] += 1
-            if verbose:
-                print(f"    FAILED: {msg}")
-        con.commit()  # commit per track so an interrupted run stays resumable
+                print(f"    -> [{best['score']}] {best['duration']}s "
+                      f"{best['channel']} | {best['title'][:50]}")
+            if kind == "picked":
+                continue
+            _best, final, msg = data
+            if kind == "ok":
+                con.execute("""UPDATE spotify_tracks SET status='downloaded', yt_url=?,
+                               matched_path=?, note=NULL, updated_at=?
+                               WHERE track_id=?""",
+                            (best["url"], final, _now(), t["track_id"]))
+                stats["downloaded"] += 1
+                if verbose:
+                    print(f"    OK: {os.path.basename(final)}")
+            else:
+                con.execute("""UPDATE spotify_tracks SET status='failed', yt_url=?,
+                               note=?, updated_at=? WHERE track_id=?""",
+                            (best["url"], msg, _now(), t["track_id"]))
+                stats["failed"] += 1
+                if verbose:
+                    print(f"    FAILED: {msg}")
+            con.commit()  # commit per track so an interrupted run stays resumable
+    finally:
+        # On Ctrl+C or an error, start nothing new. Downloads already running
+        # finish on their own; their rows stay pending and reconcile.py (or the
+        # next run) picks them up.
+        stop.set()
+        pool.shutdown(wait=False, cancel_futures=True)
     return stats

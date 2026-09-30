@@ -1065,25 +1065,16 @@ class AlbumDialog(tk.Toplevel):
         self.b_stop.configure(state="normal")
         self.b_close.configure(state="disabled")
         iids = list(self.tree.selection())
-        workers = min(settings.parallel_downloads(), len(sel))
+        workers = min(settings.parallel("parallel_downloads"), len(sel))
 
         def fetch_one(iid, t):
-            """Search and download one track. Runs on a pool thread, so it touches
-            neither widgets nor the database -- it only reports back."""
-            import download, ytpick
-            if self.stop:
-                return iid, t, "stopped", None
+            """Runs on a pool thread: touches neither widgets nor the database,
+            only reports back (row states go through app.post)."""
             try:
-                self.app.post(self._row, iid, "searching")
-                best, cands, reason = ytpick.pick(t["artist"], t["title"],
-                                                  t["duration_ms"])
-                if not best:
-                    return iid, t, "review", (reason, cands)
-                if self.stop:
-                    return iid, t, "stopped", None
-                self.app.post(self._row, iid, "downloading")
-                good, final, msg = download.invoke(t, best["url"])
-                return iid, t, "ok" if good else "failed", (best["url"], final, msg)
+                kind, data = download.fetch(
+                    t, stopped=lambda: self.stop,
+                    on_state=lambda s: self.app.post(self._row, iid, s))
+                return iid, t, kind, data
             except Exception as e:
                 return iid, t, "error", str(e)
 
@@ -1108,25 +1099,21 @@ class AlbumDialog(tk.Toplevel):
                         stopped += 1
                         self.app.post(self._row, iid, "not started")
                     elif kind == "review":
-                        reason, cands = data
                         con.execute("UPDATE spotify_tracks SET status='needs_review',"
                                     "note=?,updated_at=datetime('now') WHERE track_id=?",
-                                    (json.dumps({"reason": reason, "candidates": [
-                                        {"url": c["url"], "title": c["title"],
-                                         "dur": c["duration"], "score": c.get("score")}
-                                        for c in cands[:5]]}), t["track_id"]))
+                                    (download.review_note(*data), t["track_id"]))
                         review += 1
                         self.app.post(self._row, iid, "needs review")
                     elif kind == "ok":
-                        url, final, _msg = data
+                        best, final, _msg = data
                         con.execute("UPDATE spotify_tracks SET status='downloaded',"
                                     "yt_url=?,matched_path=?,updated_at=datetime('now') "
-                                    "WHERE track_id=?", (url, final, t["track_id"]))
+                                    "WHERE track_id=?", (best["url"], final, t["track_id"]))
                         ok += 1
                         self.app.post(self._row, iid, "downloaded")
                         self.app.post(self.app.log, "OK: " + os.path.basename(final))
                     else:
-                        _url, _final, msg = data
+                        _best, _final, msg = data
                         con.execute("UPDATE spotify_tracks SET status='failed',note=?,"
                                     "updated_at=datetime('now') WHERE track_id=?",
                                     (msg, t["track_id"]))
@@ -1319,6 +1306,7 @@ class SettingsDialog(tk.Toplevel):
         ("itunes_playlist", "iTunes playlist", None, None),
         ("contact_email", "Contact email", None, None),
         ("parallel_downloads", "Parallel album downloads", None, None),
+        ("sync_parallel_downloads", "Parallel nightly downloads", None, None),
     ]
     COLOURS = {"ok": "#2a7a2a", "warn": "#a86a00", "error": "#aa3333"}
     # key: (display name, approximate download size, source shown to the user)

@@ -74,6 +74,7 @@ and whether it came from `config.json` or the default.
 | `itunes_playlist` | `NewFromSpotify` | playlist **Move to library** adds to |
 | `contact_email` | blank | sent to MusicBrainz with `yt2mp3.ps1` lookups; it asks for one |
 | `parallel_downloads` | `20` | album tracks **Download selected** fetches at once; 1 = one at a time, capped at 20 |
+| `sync_parallel_downloads` | `5` | tracks `sync.py --download` (the nightly run) fetches at once; lower than the album default because nobody is watching if YouTube starts refusing |
 
 The downloader passes `staging_root`, `temp_root` and the tool paths to
 `yt2mp3.ps1` explicitly, so downloads always land where **Move to library** and
@@ -89,9 +90,17 @@ secrets and personal data stay on this machine.
     python sync.py --download --pick-only   # show chosen videos, download nothing
     python sync.py --full                   # re-check every liked song
     python sync.py --skip-fetch --skip-index --download --limit 10   # offline-ish batch
+    python sync.py --download --parallel 10 # 10 at a time instead of the setting
 
 Writes `missing.csv` and records every track in `sync.db`. Commits after every
 track, so an interrupted run resumes cleanly.
+
+Downloads run `sync_parallel_downloads` at a time (default 5), sharing
+`download.fetch()` with the album view: pool threads search and download, and one
+thread writes each result to `sync.db`. Output is printed as each track finishes,
+so it isn't in `missing.csv` order. On Ctrl+C or an unexpected error nothing new
+starts; downloads already running finish, and their rows stay `pending` until
+`reconcile.py` or the next run finds the files.
 
 ## Picking the right video
 
@@ -142,7 +151,7 @@ MusicBrainz guessing from a YouTube title -- and its cover art is 640x640.
 
 | File | Purpose | Rebuildable |
 |---|---|---|
-| `mp3_index.db` | `D:\Mp3` indexed by ID3 tags | yes, ~90s cold / ~17s warm |
+| `mp3_index.db` | `D:\Mp3` indexed by ID3 tags | yes, ~90s cold on a local disk (far longer over a network) / ~7s warm, even for 33k files on a network share |
 | `sync.db` | per-track status + your decisions | **no** — backed up to `sync.db.bak` each run |
 | `config.json` | Spotify credentials (gitignored) | — |
 
@@ -181,6 +190,16 @@ junk — `- Remastered 2011`, `(From The Vault)`, `feat. X`, case, punctuation,
 re-reads files whose mtime changed, so without a bump most rows keep stale keys
 and songs you own look missing. On a version bump the index re-keys all rows
 from stored tags in ~17s, no disk read.
+
+**A warm scan never opens a file.** `index_mp3.scan()` walks with `os.scandir`,
+which on Windows returns each file's size and mtime with the directory listing,
+so an unchanged file costs nothing beyond its folder's listing. The old
+`os.walk` + `os.stat` made a separate round trip per file -- 83s against a
+33,500-file library on a network share, now 7s. Files without an artist and
+title are kept in an `untagged` table with their mtime and size, so they're
+skipped when unchanged too, instead of all ~460 being re-read every run. Each
+path lives in exactly one of `tracks` or `untagged`, and moves if its tags
+change.
 
 ## Statuses in sync.db
 
