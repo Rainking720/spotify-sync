@@ -184,6 +184,12 @@ def score(cand, artist, title, want_sec):
     if chan.endswith(" - topic"):
         if chan_is_artist:
             s += 3; why.append("Topic channel")
+        elif cand.get("isrc_hit"):
+            # A label's Topic channel ("Thriller Records - Topic") carrying the
+            # official audio. The ISRC already proves the recording, so the
+            # different-name penalty below -- meant for another artist's version
+            # of the same song -- doesn't apply.
+            why.append("label's Topic channel")
         else:
             s -= 4; why.append("Topic channel of DIFFERENT artist")
     elif "vevo" in chan and chan_is_artist:
