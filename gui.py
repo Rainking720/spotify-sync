@@ -48,8 +48,9 @@ def fetch(statuses):
     if not _schema_checked:
         import sync
         sync.ensure_downloaded_at(con)      # adds downloaded_at on first use
+        sync.ensure_isrc(con)
         _schema_checked = True
-    extra = ["status", "note", "matched_path", "downloaded_at"]
+    extra = ["status", "note", "matched_path", "downloaded_at", "isrc"]
     rows = con.execute(
         "SELECT " + ",".join(COLS + extra) + " FROM spotify_tracks "
         "WHERE status IN (" + qs + ") ORDER BY artist,title", statuses).fetchall()
@@ -521,7 +522,7 @@ class App(tk.Tk):
         # Candidates stored when the track was queued; re-search for fresh ones.
         self.cands = [{"url": c.get("url"), "title": c.get("title"),
                        "duration": c.get("dur") or 0, "channel": "",
-                       "score": c.get("score")}
+                       "score": c.get("score"), "isrc_hit": c.get("isrc")}
                       for c in (d.get("candidates") or [])]
         self._fill_cands(want)
 
@@ -536,6 +537,7 @@ class App(tk.Tk):
                         str(c.get("duration")) + "s",
                         "{:+d}s".format(delta),
                         (c.get("channel") or "")[:32],
+                        ("[ISRC] " if c.get("isrc_hit") else "") +
                         (c.get("title") or "")[:80]))
 
     # ---------- actions ----------
@@ -554,7 +556,9 @@ class App(tk.Tk):
 
         def work():
             try:
-                found = ytpick.search(artist, title, n=8)
+                # the ISRC doesn't depend on the search terms, so its hit is
+                # offered whatever has been typed
+                found = ytpick.candidates(artist, title, t.get("isrc"), n=8)
                 for c in found:
                     c["score"], c["why"] = ytpick.score(c, artist, title, want)
                 if not loose:
@@ -1081,6 +1085,20 @@ class AlbumDialog(tk.Toplevel):
         def work():
             import albums
             from concurrent.futures import ThreadPoolExecutor, as_completed
+            # Album tracklists carry no ISRC, so look each one up (one request
+            # per track) for the ISRC search. Best effort: without it a track is
+            # matched exactly as before.
+            try:
+                import spotify, sync
+                sp = spotify.client()
+                for n, t in enumerate(sel, 1):
+                    if not t.get("isrc"):
+                        self.app.post(lambda m: self.status.configure(text=m),
+                                      "looking up recording codes {}/{}...".format(
+                                          n, len(sel)))
+                        t["isrc"] = sync.lookup_isrc(sp, t["track_id"])
+            except Exception:
+                pass
             con = db()
             albums.queue(con, sel)          # track them before fetching anything
             ok = fail = review = stopped = 0

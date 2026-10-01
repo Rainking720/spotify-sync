@@ -15,6 +15,13 @@ SEP = "|||"
 HARD_TOLERANCE = 7
 # Best candidate must reach this score to download unattended.
 MIN_CONFIDENT = 3
+# Bonus for YouTube's top result when searching the song's ISRC. That is almost
+# always the auto-generated official audio -- the album recording itself -- which
+# the channel checks below rarely recognise (YouTube now lists it under the
+# artist's own channel name rather than "<Artist> - Topic"). Big enough to beat
+# a music or lyric video of the same song (~9), not so big that it overrides the
+# duration window or the title gate.
+ISRC_BONUS = 4
 
 # Words that signal a different recording. Only penalised when Spotify's own
 # title does NOT contain them -- a liked track called "... - Live" should match
@@ -39,7 +46,34 @@ def ytdlp_path():
 
 def search(artist, title, n=5, timeout=90):
     """Return candidate dicts from a YouTube search. Raw Spotify strings in."""
-    query = f"{artist} {title}".strip()
+    return _search(f"{artist} {title}".strip(), n, timeout)
+
+
+def search_isrc(isrc, timeout=90):
+    """YouTube's top result for an ISRC, flagged isrc_hit -- or [] when there is
+    no ISRC, no result, or the search fails. Only the top result: below it,
+    YouTube pads with unrelated videos."""
+    if not isrc:
+        return []
+    try:
+        hits = _search(isrc, 1, timeout)
+    except Exception:
+        return []          # extra candidates only; never the reason a search fails
+    for c in hits:
+        c["isrc_hit"] = True
+    return hits
+
+
+def candidates(artist, title, isrc=None, n=5):
+    """The ISRC hit (if any) plus the usual artist/title search, without
+    duplicates. The artist/title search always runs, so a song with no ISRC, or
+    one YouTube doesn't know, is matched exactly as before."""
+    hits = search_isrc(isrc)
+    seen = {c["id"] for c in hits}
+    return hits + [c for c in search(artist, title, n=n) if c["id"] not in seen]
+
+
+def _search(query, n, timeout):
     fmt = SEP.join(["%(id)s", "%(title)s", "%(duration)s", "%(channel)s"])
     cmd = [ytdlp_path(), "--js-runtimes", "node", "--no-warnings", "--quiet",
            "--skip-download", "--flat-playlist", "--print", fmt, f"ytsearch{n}:{query}"]
@@ -169,13 +203,15 @@ def score(cand, artist, title, want_sec):
     for w in SOFT_WORDS:
         if w in ct and w not in sp_title:
             s -= 1; why.append(f"soft:{w}")
+    if cand.get("isrc_hit"):
+        s += ISRC_BONUS; why.append("found by ISRC")
     return s, why
 
 
-def pick(artist, title, duration_ms, n=5):
+def pick(artist, title, duration_ms, n=5, isrc=None):
     """Return (best, candidates, reason). best is None when unsure."""
     want = round((duration_ms or 0) / 1000)
-    cands = search(artist, title, n=n)
+    cands = candidates(artist, title, isrc, n=n)
     if not cands:
         return None, [], "no search results"
     if not want:
@@ -198,10 +234,12 @@ def pick(artist, title, duration_ms, n=5):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     a, t, ms = sys.argv[1], sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    best, cands, reason = pick(a, t, ms)
+    isrc = sys.argv[4] if len(sys.argv) > 4 else None
+    best, cands, reason = pick(a, t, ms, isrc=isrc)
     print(f"query: {a} - {t}  (want {round(ms/1000)}s)\nreason: {reason}")
     for c in cands:
         mark = "->" if best and c["id"] == best["id"] else "  "
+        mark += "*" if c.get("isrc_hit") else " "
         print(f" {mark} [{c.get('score','?'):>3}] {c['duration']:>4}s {c['channel'][:28]:28} "
               f"{c['title'][:52]}")
         if c.get("why"):

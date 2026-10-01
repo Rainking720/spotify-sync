@@ -6,7 +6,7 @@ Phase 1: classify only. Every liked track lands in sync.db as either
 sync.db is the one file that cannot be rebuilt: it records decisions, not facts
 about disk. It is backed up before every run.
 """
-import argparse, csv, os, shutil, sqlite3, sys
+import argparse, csv, os, re, shutil, sqlite3, sys
 from datetime import datetime, timezone
 
 import index_mp3
@@ -35,7 +35,75 @@ def connect(db=SYNC_DB):
     con.execute("CREATE INDEX IF NOT EXISTS ix_status ON spotify_tracks(status)")
     con.commit()
     ensure_downloaded_at(con)
+    ensure_isrc(con)
     return con
+
+
+def ensure_isrc(con):
+    """Add the isrc column (Spotify's recording code, used to find the exact
+    recording on YouTube) if missing."""
+    if "isrc" not in [r[1] for r in con.execute("PRAGMA table_info(spotify_tracks)")]:
+        try:
+            con.execute("ALTER TABLE spotify_tracks ADD COLUMN isrc TEXT")
+            con.commit()
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e):     # lost a race: fine
+                raise
+
+
+_SPOTIFY_ID = re.compile(r"^[0-9A-Za-z]{22}$")
+
+
+def backfill_isrc(con, sp, verbose=True):
+    """One-time: fill isrc for rows that predate the column. Writes only isrc,
+    matched by track_id -- unlike a --full sync, it re-classifies nothing, so it
+    can't change any row's status. Liked songs come from a full walk of the
+    likes (about one request per 50); anything else still waiting to download
+    is looked up a track at a time."""
+    con.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    if con.execute("SELECT 1 FROM meta WHERE k='isrc_backfilled'").fetchone():
+        return 0
+    import spotify
+    n = 0
+    for t in spotify.fetch_liked(sp, full=True, progress=False):
+        if t.get("isrc"):
+            n += con.execute("UPDATE spotify_tracks SET isrc=? WHERE track_id=? "
+                             "AND (isrc IS NULL OR isrc='')",
+                             (t["isrc"], t["track_id"])).rowcount
+    n += fill_missing_isrcs(con, sp)
+    con.execute("INSERT OR REPLACE INTO meta VALUES('isrc_backfilled', ?)",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"),))
+    con.commit()
+    if verbose:
+        print(f"isrc: filled in {n} existing row(s)")
+    return n
+
+
+def fill_missing_isrcs(con, sp, statuses=("pending", "needs_review", "failed"), cap=200):
+    """Look up the isrc of rows about to be searched for (album-view rows have
+    none: Spotify's album tracklists don't carry it). One request per track --
+    Spotify refuses this app's batch /tracks endpoint (403)."""
+    qs = ",".join("?" * len(statuses))
+    rows = con.execute("SELECT track_id FROM spotify_tracks WHERE status IN (" + qs +
+                       ") AND (isrc IS NULL OR isrc='')", statuses).fetchall()
+    n = 0
+    for (tid,) in rows[:cap]:
+        isrc = lookup_isrc(sp, tid)
+        if isrc:
+            con.execute("UPDATE spotify_tracks SET isrc=? WHERE track_id=?", (isrc, tid))
+            n += 1
+    con.commit()
+    return n
+
+
+def lookup_isrc(sp, track_id):
+    """The isrc of one Spotify track, or '' (not a Spotify id, or no answer)."""
+    if not track_id or not _SPOTIFY_ID.match(track_id):
+        return ""
+    try:
+        return ((sp.track(track_id) or {}).get("external_ids") or {}).get("isrc", "") or ""
+    except Exception:
+        return ""
 
 
 # When each track was downloaded, kept by triggers so every path that marks a
@@ -128,8 +196,8 @@ def classify(con, tracks, lib_keys):
         con.execute("""INSERT INTO spotify_tracks
             (track_id, added_at, artist, all_artists, title, album, duration_ms,
              track_number, year, cover_url, spotify_url, n_artist, n_title,
-             status, matched_path, first_seen, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             status, matched_path, first_seen, updated_at, isrc)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(track_id) DO UPDATE SET
               added_at=excluded.added_at, artist=excluded.artist,
               all_artists=excluded.all_artists, title=excluded.title,
@@ -143,11 +211,12 @@ def classify(con, tracks, lib_keys):
                            AND spotify_tracks.note=?)
                      THEN spotify_tracks.status ELSE excluded.status END,
               matched_path=COALESCE(excluded.matched_path, spotify_tracks.matched_path),
+              isrc=COALESCE(NULLIF(excluded.isrc, ''), spotify_tracks.isrc),
               updated_at=excluded.updated_at""",
             (t["track_id"], t["added_at"], t["artist"], t["all_artists"], t["title"],
              t["album"], t["duration_ms"], t["track_number"], t["year"],
              t["cover_url"], t["spotify_url"], na, nt, status, matched, now, now,
-             MANUAL_OWNED))
+             t.get("isrc") or None, MANUAL_OWNED))
     con.commit()
     return {"new": new, "owned": owned, "pending": pending, "preserved": preserved}
 
@@ -216,6 +285,10 @@ def main():
         tracks = spotify.fetch_liked(sp, known_ids=known, full=args.full)
         print(f"fetched {len(tracks)} tracks from Spotify")
         counts = classify(con, tracks, lib_keys)
+        try:
+            backfill_isrc(con, sp)             # once, for rows from before the column
+        except Exception as e:                 # never worth failing the sync over
+            print(f"isrc backfill skipped: {e}")
     csv_path = os.path.join(HERE, "missing.csv")
     missing = report(con, csv_path)
 
@@ -235,6 +308,11 @@ def main():
     print(f"\nfull list -> {csv_path}")
     if args.download:
         import download
+        if not args.skip_fetch:
+            try:
+                fill_missing_isrcs(con, sp, statuses=("pending",))   # e.g. album-view rows
+            except Exception as e:
+                print(f"isrc lookup skipped: {e}")
         print("")
         print(f"downloading (limit={args.limit or 'none'})"
               f"{' [pick-only]' if args.pick_only else ''}...")

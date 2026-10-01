@@ -139,16 +139,19 @@ def queue(con, tracks):
     added = 0
     for t in tracks:
         if t["track_id"] in existing:
+            if t.get("isrc"):
+                con.execute("UPDATE spotify_tracks SET isrc=? WHERE track_id=? AND "
+                            "(isrc IS NULL OR isrc='')", (t["isrc"], t["track_id"]))
             continue
         con.execute(
             "INSERT INTO spotify_tracks (track_id, added_at, artist, all_artists, "
             "title, album, duration_ms, track_number, year, cover_url, spotify_url, "
-            "n_artist, n_title, status, source, first_seen, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pending','album',?,?)",
+            "n_artist, n_title, status, source, first_seen, updated_at, isrc) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pending','album',?,?,?)",
             (t["track_id"], now, t["artist"], t["all_artists"], t["title"],
              t["album"], t["duration_ms"], t["track_number"], t["year"],
              t["cover_url"], t["spotify_url"], t["n_artist"], t["n_title"],
-             now, now))
+             now, now, t.get("isrc") or None))
         added += 1
     con.commit()
     return added

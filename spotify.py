@@ -63,6 +63,8 @@ def _flatten(item):
         "year": (album.get("release_date") or "")[:4],
         "cover_url": images[0]["url"] if images else "",
         "spotify_url": (tr.get("external_urls") or {}).get("spotify", ""),
+        # the recording's code; searching YouTube for it finds the official audio
+        "isrc": (tr.get("external_ids") or {}).get("isrc", "") or "",
     }
 
 

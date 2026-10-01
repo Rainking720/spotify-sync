@@ -34,6 +34,8 @@ def invoke(track, url, ps1=PS1, music_root=None, timeout=600):
         cmd += ["-Year", str(track["year"])]
     if track.get("cover_url"):
         cmd += ["-CoverUrl", track["cover_url"]]
+    if track.get("isrc"):
+        cmd += ["-Isrc", track["isrc"]]      # written to the mp3's TSRC frame
     # Always pass the folders and tools explicitly, so yt2mp3.ps1 downloads to the
     # same staging folder that "Move to library" later reads from. Before, it used
     # its own built-in default and ignored the staging_root setting.
@@ -80,7 +82,11 @@ def invoke(track, url, ps1=PS1, music_root=None, timeout=600):
                 break
     if p.returncode != 0:
         err = (p.stderr or "").strip().splitlines()
-        return False, final, (err[-1] if err else f"exit {p.returncode}")[:300]
+        # yt-dlp's own "ERROR: ..." line says why (bot check, unavailable, 403);
+        # the last line is only PowerShell's "FullyQualifiedErrorId" trailer.
+        why = [l.strip() for l in err if l.strip().startswith("ERROR:")]
+        msg = why[-1] if why else (err[-1] if err else f"exit {p.returncode}")
+        return False, final, msg[:300]
     if not final:
         return False, None, "script finished but no mp3 path found"
     return True, final, "ok"
@@ -90,7 +96,8 @@ def review_note(reason, cands):
     """The note stored on a needs_review row: why, plus the top candidates."""
     return json.dumps({"reason": reason,
                        "candidates": [{"url": c["url"], "title": c["title"],
-                                       "dur": c["duration"], "score": c.get("score")}
+                                       "dur": c["duration"], "score": c.get("score"),
+                                       "isrc": bool(c.get("isrc_hit"))}
                                       for c in cands[:5]]})
 
 
@@ -109,7 +116,7 @@ def fetch(track, stopped=lambda: False, on_state=None, music_root=None, dry=Fals
     if on_state:
         on_state("searching")
     best, cands, reason = ytpick.pick(track["artist"], track["title"],
-                                      track["duration_ms"])
+                                      track["duration_ms"], isrc=track.get("isrc"))
     if not best:
         return "review", (reason, cands)
     if dry:
@@ -130,11 +137,11 @@ def run(con, limit=None, music_root=None, dry=False, verbose=True, workers=None)
     import threading
     import settings
     rows = con.execute("""SELECT track_id, artist, title, album, duration_ms,
-                                 track_number, year, cover_url
+                                 track_number, year, cover_url, isrc
                           FROM spotify_tracks WHERE status='pending'
                           ORDER BY added_at DESC""").fetchall()
     cols = ["track_id", "artist", "title", "album", "duration_ms",
-            "track_number", "year", "cover_url"]
+            "track_number", "year", "cover_url", "isrc"]
     tracks = [dict(zip(cols, r)) for r in rows]
     if limit:
         tracks = tracks[:limit]

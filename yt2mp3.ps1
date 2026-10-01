@@ -14,6 +14,7 @@ param(
     [string]$Track,
     [string]$Year,
     [string]$CoverUrl,
+    [string]$Isrc,
     [string]$PathOut,
     [switch]$KeepTemp,
     [switch]$NoLookup,
@@ -342,6 +343,9 @@ try {
     $ffArgs += @('-metadata', "album_artist=$finalArtist")
     $ffArgs += @('-metadata', "track=$trackStr")
     if ($finalYear) { $ffArgs += @('-metadata', "date=$finalYear") }
+    # The recording's ISRC as the standard TSRC frame (the key "ISRC" would make a
+    # TXXX frame instead), so files can later be matched to Spotify by recording.
+    if ($Isrc -match '^[A-Za-z]{2}[A-Za-z0-9]{3}\d{7}$') { $ffArgs += @('-metadata', "TSRC=$($Isrc.ToUpper())") }
     $ffArgs += $finalPath
 
     & $Ffmpeg @ffArgs

@@ -129,6 +129,36 @@ Could This Happen to Me?)" vs the band's own "Untitled"). A core-title match --
 parentheticals stripped -- earns a smaller +1 so the official upload isn't
 rejected, while a true full match still outranks it.
 
+### ISRC first
+
+Every Spotify track carries an **ISRC**, the industry code for one specific
+recording, stored in `sync.db`'s `isrc` column. When a track has one, `ytpick`
+also searches YouTube for the bare ISRC (`ytsearch1:<ISRC>`). Its top result is
+nearly always YouTube's auto-generated official audio ("Provided to YouTube
+by..."), which is the album recording itself, and it gets `ISRC_BONUS` (+4,
+shown as "found by ISRC" / `[ISRC]` in the candidate list). The normal
+artist/title search **always runs as well**, and the ISRC hit still has to pass
+the duration window and title gate. So a track with no ISRC, an ISRC YouTube
+doesn't know, or a wrong hit is matched exactly as before.
+
+Measured on the 172 songs already downloaded (pick-only, nothing fetched): 116
+would now get the official audio instead of a music/lyric video or label upload,
+47 picked the same video as before (now confirmed by ISRC), 9 were unchanged,
+and none fell to review. A random 15 of the switches were all auto-generated
+official audio. YouTube Music's search was tried and rejected: for codes it
+doesn't know it returns unrelated songs.
+
+Where ISRCs come from: the liked-songs fetch already includes them, so the
+nightly sync stores them at no extra cost. Rows from before the column were
+filled once by `sync.backfill_isrc()` (a full walk of likes, writing **only**
+`isrc`, never re-classifying). Spotify's album tracklists don't include ISRCs,
+so the album view and pending album rows look each track up individually
+(`sync.lookup_isrc`; Spotify refuses this app's batch `/tracks` call with 403).
+
+Downloads write the ISRC to the mp3's **`TSRC`** ID3 frame (`yt2mp3.ps1
+-Isrc`). The metadata key has to be `TSRC`: `ISRC` makes ffmpeg write a
+`TXXX:isrc` frame instead.
+
 Note YouTube search results vary between runs, so re-picking an already-downloaded
 track may return a different (equally valid) video, and a track that hit
 `needs_review` may succeed on a later run. Don't treat either as a defect.

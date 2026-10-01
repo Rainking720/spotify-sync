@@ -15,7 +15,7 @@ import download, ytpick
 HERE = os.path.dirname(os.path.abspath(__file__))
 SYNC_DB = os.path.join(HERE, "sync.db")
 COLS = ["track_id", "artist", "title", "album", "duration_ms",
-        "track_number", "year", "cover_url"]
+        "track_number", "year", "cover_url", "isrc"]
 
 
 def queue(con, status="needs_review"):
@@ -77,6 +77,8 @@ def main():
     ap.add_argument("--db", default=SYNC_DB)
     args = ap.parse_args()
     con = sqlite3.connect(args.db)
+    import sync
+    sync.ensure_isrc(con)           # older databases lack the column
 
     if args.requeue:
         items = queue(con, "skipped")
@@ -105,7 +107,8 @@ def main():
         print(f"re-picking {len(items)} queued track(s)...")
         done = 0
         for t in items:
-            best, cands, reason = ytpick.pick(t["artist"], t["title"], t["duration_ms"])
+            best, cands, reason = ytpick.pick(t["artist"], t["title"], t["duration_ms"],
+                                              isrc=t.get("isrc"))
             if not best:
                 print(f"  still stuck: {t['artist']} - {t['title']}  ({reason})")
                 continue
