@@ -18,6 +18,7 @@ import os, sqlite3, time
 from datetime import datetime, timezone
 
 import history
+import itunes
 import plays as plays_mod
 from norm import norm_artist, norm_title
 
@@ -52,7 +53,7 @@ def snapshot(progress=None):
     """Read the whole iTunes library into itunes_cache.db (~2.5ms/track)."""
     import win32com.client as w
     _com_init()
-    app = w.Dispatch("iTunes.Application")
+    app = itunes.dispatch()
     coll = app.LibraryPlaylist.Tracks
     total = coll.Count
     # Build into a temp file and swap it in at the end. Writing in place meant a
@@ -679,7 +680,7 @@ def _apply(rows, summary, con, progress, write_itunes, create_missing, dry):
     itunes_rows = [r for r in rows if r["target"] == TO_ITUNES]
     if itunes_rows and write_itunes:
         _com_init()
-        coll = w.Dispatch("iTunes.Application").LibraryPlaylist.Tracks
+        coll = itunes.dispatch().LibraryPlaylist.Tracks
         for n, r in enumerate(itunes_rows, 1):
             if progress and n % 25 == 0:
                 progress(n, len(itunes_rows))
@@ -908,7 +909,7 @@ def _undo(run_id, con):
     failed_pids, failed_keys = set(), set()
     if rows:
         _com_init()
-        coll = w.Dispatch("iTunes.Application").LibraryPlaylist.Tracks
+        coll = itunes.dispatch().LibraryPlaylist.Tracks
     for pid, idx, artist, name, old_count, old_date in rows:
         try:
             t = coll.Item(idx)

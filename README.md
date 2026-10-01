@@ -449,6 +449,15 @@ library track to remove it properly.
 for the whole calling thread even when this module didn't own it, breaking the
 caller's next COM call.
 
+**Every connection goes through `itunes.dispatch()`**, which repairs pywin32's
+generated-code cache when needed. pywin32 writes Python wrappers for iTunes'
+type library under `%TEMP%\gen_py\3.13\9E93C96F-...`. Windows' temp-file cleanup
+deleted the `.py` files there on 2026-09-28 and left the folder, and every
+connection then failed (`has no attribute 'CLSIDToClassMap'`), so the 2-hourly
+play-count job failed for three days. `dispatch()` catches that kind of failure,
+removes only iTunes' cache entry, and connects again; pywin32 regenerates the
+cache in a few seconds. A genuine "iTunes not reachable" COM error isn't caught.
+
 **Copy-on-add** is off on this machine (verified: an added track's `Location`
 pointed back at `D:\Mp3`), so there's one copy on disk. If "Copy files to iTunes
 Media folder when adding to library" is ever turned on in Preferences > Advanced,

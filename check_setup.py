@@ -131,9 +131,9 @@ def main():
         line("WARN", "iTunes", "skipped (--no-itunes)")
     else:
         try:
-            import pythoncom, win32com.client as w
+            import pythoncom, itunes
             pythoncom.CoInitialize()
-            app = w.Dispatch("iTunes.Application")
+            app = itunes.dispatch()
             line("OK", "iTunes " + str(app.Version),
                  "{} tracks".format(app.LibraryPlaylist.Tracks.Count))
         except Exception as e:

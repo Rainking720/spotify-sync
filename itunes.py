@@ -49,11 +49,53 @@ def uninit_thread():
     return
 
 
-def connect():
-    """Attach to iTunes. Launches it if it isn't running."""
+def dispatch():
+    """client.Dispatch for iTunes, repairing pywin32's generated-code cache first
+    if it has been broken.
+
+    pywin32 writes Python wrappers for iTunes' type library under
+    %TEMP%\\gen_py. Windows' temp-file cleanup can delete the .py files there and
+    leave the folder, after which every Dispatch fails inside gencache (for
+    example "has no attribute 'CLSIDToClassMap'") until the folder is removed.
+    Removing just iTunes' entry lets pywin32 regenerate it, which takes a few
+    seconds. Real COM failures (iTunes not reachable) aren't caught here.
+    """
     _, client = _com()
     try:
         return client.Dispatch(PROG_ID)
+    except (AttributeError, ImportError, SyntaxError, EOFError, ValueError):
+        _clear_gen_cache()
+        return client.Dispatch(PROG_ID)
+
+
+ITUNES_TYPELIB = "9E93C96F-CF0D-43F6-8BA8-B807A3370712"
+
+
+def _clear_gen_cache():
+    import shutil, sys
+    from win32com.client import gencache
+    root = gencache.GetGeneratePath()
+    for name in os.listdir(root):
+        if name.upper().startswith(ITUNES_TYPELIB):
+            p = os.path.join(root, name)
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+    prefix = "win32com.gen_py." + ITUNES_TYPELIB
+    for mod in [m for m in sys.modules if m.upper().startswith(prefix.upper())]:
+        del sys.modules[mod]
+
+
+def connect():
+    """Attach to iTunes. Launches it if it isn't running."""
+    try:
+        return dispatch()
+    except ITunesError:
+        raise
     except Exception as e:
         raise ITunesError("could not reach iTunes: " + str(e))
 
